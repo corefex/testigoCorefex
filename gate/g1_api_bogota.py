@@ -43,6 +43,9 @@ def portal_screenshot(path):
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page.goto("http://127.0.0.1:%d/orders/new?scenario=clean&variant=1" % httpd.server_port)
+            # the cart starts empty (COP 0) since F2's add-items step; fill it first
+            page.click('[data-testid="add-items"]')
+            page.wait_for_selector('[data-testid="items-added"]')
             page.screenshot(path=str(path))
             browser.close()
     finally:

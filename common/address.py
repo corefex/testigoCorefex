@@ -21,13 +21,17 @@ the city, the spacing, the case and the reader's small slips do not count:
   dash          "-", en dash, em dash (spaces around it allowed); after an
                 explicit separator a plain space also works ("# 7 15")
 
-Whatever follows the address is part of it (review of cebf0f4: "Calle 45 #
-12-30 Sur", "..., Medellín", "..., Bogotá Soacha", "... Int. 2" are other
-addresses): up to four words after it, up to a punctuation mark other than ","
-and ".", or the next address. The city "Bogotá"/"Bogota" and "D.C." are
-dropped, and so is the shop's name when it is exactly all that is left (the
-portal shows the delivery point's name right after the address field:
-"Calle 45 # 12-30, Bogotá Tienda Doña Marta").
+What follows the address and names a place is part of it (review of cebf0f4:
+"Calle 45 # 12-30 Sur", "..., Medellín", "..., Bogotá Soacha", "... Int. 2"
+are other addresses): up to four words after it, up to a punctuation mark
+other than "," and ".", or the next address, taking a quadrant, a complement
+word with the word after it ("Int. 2", "Apto 301", "Torre B") and capitalized
+words (a locality: "Medellín", "Soacha"). The first lower-case word of any
+other kind ends it, so the sentence an address sits in ("... to Carrera 80 #
+7-15 and confirm", "... #7-15 instead") is not read as part of it. The city
+"Bogotá"/"Bogota" and "D.C." are dropped, and so is the shop's name when it is
+exactly all that is left (the portal shows the delivery point's name right
+after the address field: "Calle 45 # 12-30, Bogotá Tienda Doña Marta").
 
 `canonical_addresses(text)` gives every address in the text as
 "calle 45 # 12-30" / "calle 45a bis # 12-30 sur", sorted and without
@@ -56,6 +60,10 @@ CITY_WORDS = frozenset({"bogota", "dc"})
 # exactly that name (and nothing more) after an address is not part of it.
 SHOP_NAME = SHOP["name"]
 TAIL_MAX = 4
+# Complement words: they and the word after them belong to the address.
+COMPLEMENTS = frozenset({"int", "interior", "apto", "apartamento", "apt", "ap", "torre",
+                         "bloque", "bl", "casa", "local", "piso", "of", "oficina",
+                         "etapa", "manzana", "mz", "lote", "conjunto"})
 
 # Longest first, so "cra" is not read as "cr" + "a".
 _STREET = "|".join(sorted(STREET_TYPES, key=len, reverse=True))
@@ -115,7 +123,8 @@ def _is_word_start(c):
 
 def _segment(text, i):
     """The words after an address at text[i:], up to a punctuation mark other
-    than "," and ".", the next address, or the end (folded, dots removed)."""
+    than "," and ".", the next address, or the end, as (folded without dots,
+    capitalized in the text)."""
     words, n = [], len(text)
     while True:
         while i < n and (text[i].isspace() or text[i] == ","):
@@ -125,20 +134,30 @@ def _segment(text, i):
         j = i
         while j < n and (_is_word_start(text[j]) or text[j] == "."):
             j += 1
-        words.append(fold(text[i:j]).replace(".", ""))
+        words.append((fold(text[i:j]).replace(".", ""), text[i].isupper()))
         i = j
 
 
 def _tail(text, i):
-    """The words that follow an address and belong to it (module docstring):
-    every word but the city, unless the rest is exactly the shop's name."""
-    out, words = [], _segment(text, i)
-    for k, word in enumerate(words):
-        if words[k:] == _SHOP_WORDS or len(out) == TAIL_MAX:
+    """The words that follow an address and belong to it (module docstring)."""
+    out, segment = [], _segment(text, i)
+    words = [w for w, _ in segment]
+    k = 0
+    while k < len(words) and len(out) < TAIL_MAX:
+        word, capital = segment[k]
+        if words[k:] == _SHOP_WORDS:
             break
-        if word not in CITY_WORDS:
+        if word in CITY_WORDS:
+            pass
+        elif word in COMPLEMENTS:
+            out += words[k:k + 2]
+            k += 1
+        elif word in QUADRANTS or capital:
             out.append(word)
-    return out
+        else:
+            break
+        k += 1
+    return out[:TAIL_MAX]
 
 
 def canonical_addresses(text):

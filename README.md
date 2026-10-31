@@ -182,7 +182,8 @@ flowchart TB
         loop -->|HttpSink POST /events| svc
     end
     drv --> portal
-    hub -->|WebSocket| ui["Browser: the 9 views"]
+    hub -->|WebSocket| ui["Browser: landing + guided demo"]
+    svc -->|POST /api/run starts| proc3
 ```
 
 | Folder | What lives there |
@@ -194,7 +195,7 @@ flowchart TB
 | `policy/` | the owner's signed policy and its compiler |
 | `approval/` | spoken total and destination matching for the approval |
 | `receipts/` | receipt building, Ed25519 keys, `testigo verify` |
-| `ui/` | the live interface (cover + 8 views) |
+| `ui/` | the live interface: landing, guided demo, results (`flow.js`) and the presenter views (`app.js`) |
 | `examples/` | a valid receipt (`clean`) and a tampered one (`a3`) with their crops |
 | `gate/` | gate checks against the real models |
 | `scripts/` | `up`, `doctor`, `check_secrets` |
@@ -211,8 +212,8 @@ cp .env.example .env    # fill in your own Meta API key; never commit .env
 make run                # installs what is missing, starts portal + interceptor
 ```
 
-- Interface: <http://localhost:8090/> (arrow keys or 0–8 move between views,
-  `A` follows the live run).
+- Interface: <http://localhost:8090/>. The landing explains TESTIGO+; **Try the
+  demo** walks you through it in four steps (see [How to try it](#how-to-try-it)).
 - Portal: <http://localhost:8080/> (index of every scenario and variant).
 
 To check that the views paint without a real run, replay the offline fixtures.
@@ -244,26 +245,37 @@ Real runs (they spend Meta credits; `runs/usage.jsonl` logs every call and
 | Command | What it does |
 | --- | --- |
 | `.venv/bin/python -m policy.compile mandate mandato.wav` | spoken mandate → signed policy (Voice + Spark) |
-| `.venv/bin/python -m agent.run --scenario a3 [--no-supervisor] [--headed]` | one run: Wonder in Chromium, with or without TESTIGO+; approve in view 5 |
+| `.venv/bin/python -m agent.run --scenario a3 [--no-supervisor] [--headed]` | one run from the terminal (the demo's **Run the agent** starts exactly this); approve in the interface |
 | `.venv/bin/python -m bench.run --edge` | WitnessBench: 20 configurations × 2 modes, plus the filter's known limit |
 | `.venv/bin/python -m gate.run_gate --dry-run` | the gate checklist (g1–g6) |
 
-## The interface
+## How to try it
+
+Open <http://localhost:8090/> after `make run`. The landing explains the
+problem, the three attacks, how TESTIGO+ works and the WitnessBench numbers
+(read from `runs/bench_results.json`, or the committed copy in `results/`).
+**Try the demo** starts a four-step guide, one main action per screen:
+
+| Step | What you do | What you see |
+| --- | --- | --- |
+| 1 Your rules | **Use these rules**, or **Record new rules** (say them aloud, check the draft, sign it) | the active signed policy in plain words |
+| 2 Run the agent | pick a situation (normal order, hidden order in the page code, order painted in an image, address changed at the last second), leave **Protect with TESTIGO+** on or switch it off, then **Run the agent** | — |
+| 3 Watching | approve or deny when TESTIGO+ asks: read the total and the address aloud | the agent's screen and a plain timeline of what TESTIGO+ checked |
+| 4 Result | **Verify receipt**, **Run another** or **Compare without TESTIGO+** | one outcome (blocked and why, delivered to your shop, delivered to the attacker, agent stopped on its own); the evidence behind **Show details** |
+
+**Run the agent** starts a real run (`agent.run`, headless): it uses the Meta
+models and your API credit, one run at a time. Runs started from the terminal
+show up in the same steps. **Results** in the top bar has the counts per
+attack.
 
 Every value on screen comes from an event or a file, never from hard-coded
-numbers. If a capture or crop is missing, the view says so.
+numbers. If a capture or crop is missing, the page says so.
 
-| View | Shows |
-| --- | --- |
-| Cover | what TESTIGO+ is |
-| 1 Mandate | the owner's signed policy |
-| 2 Agent working | live steps of the supervised run |
-| 3 Without TESTIGO+ | the same attack succeeding with no supervisor |
-| 4 Divergence | SAM boxes on the screenshot; page code vs. pixels |
-| 5 Approval | real crops of total and delivery address, read aloud |
-| 6 After the click | approved vs. executed crops: VERIFIED or MISMATCH |
-| 7 Receipt | the signed receipt and the real `testigo verify` output |
-| 8 WitnessBench | orders delivered to the attacker's address, without vs. with TESTIGO+ |
+For recording the video, the original nine views (cover, mandate, agent,
+without TESTIGO+, divergence, approval, after the click, receipt,
+WitnessBench) are still at <http://localhost:8090/#/present> (arrow keys or
+0–8 move between views, `A` follows the live run). They are not linked from
+the site.
 
 The service only accepts requests from this machine and from its own page, so
 other tabs (the attacking portal included) cannot inject events.
@@ -294,11 +306,11 @@ scenario and are retired until the re-run.
 | Pixel channel: Spark reads + SAM boxes + real crops | works (F4); latency: pendiente: se vuelve a medir en el dominio de entrega |
 | Divergence filter, decision engine, signed policy (`deliver_only`) | works (F5, F6) |
 | Spoken mandate → signed policy | works with Voice + Spark (F1) |
-| Voice approval in view 5 | built; tested offline and headless, not yet with a real microphone (F7) |
+| Voice approval in the interface | built; tested offline and headless, not yet with a real microphone (F7) |
 | Re-read on the review screen (blocks) and after the click (flags) | works (F8) |
 | Signed receipts in every approved run, `testigo verify` | works; a real receipt verifies (F9) |
 | WitnessBench | pendiente: se vuelve a medir en el dominio de entrega (F10) |
-| Live interface | all 9 views from events and files (F11) |
+| Live interface | landing, four-step guided demo that starts runs (`POST /api/run`), results page; presenter views at `#/present` (F11) |
 
 The Meta computer-use tool is not available for Wonder with our keys, so
 Wonder drives the browser through our own `function` tools (F3-D5). How many

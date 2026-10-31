@@ -1,8 +1,10 @@
-/* TESTIGO+ interface (F11).
+/* TESTIGO+ interface (F11): state, helpers, the approval and mandate actions,
+ * and the presenter views (#/present). The landing, the guided demo and the
+ * router live in flow.js, loaded after this file.
  *
  * Shows, never decides. Every value on screen comes from an event on /ws or a
  * file the service reads (policy, receipt, bench). State is rebuilt from the
- * events; nothing is stored in the browser except the current view (URL hash).
+ * events; nothing is stored in the browser except the current route (URL hash).
  */
 "use strict";
 
@@ -18,6 +20,7 @@ const VIEWS = [
   { key: "bench", name: "WitnessBench" },
 ];
 const REQUIRED = ["amount", "address", "confirm button"];
+let PLAIN = false;   // true outside the presenter: no hashes, no model names in primary copy
 const SHOT_W = 1280, SHOT_H = 800;   // portal capture size (F11-D3)
 
 // -- icons ---------------------------------------------------------------
@@ -48,7 +51,11 @@ function freshRun() {
 const S = {
   conn: "connecting", test: false, current: null,
   runs: { supervised: freshRun(), no_supervisor: freshRun() },
-  view: viewFromHash(), auto: true,
+  route: { name: "landing" }, view: 0, auto: true,
+  // the run started from this page (/api/run) and the guided demo's choices
+  proc: null, runReq: { busy: false, error: "", busyRun: false },
+  pick: { scenario: "a1", supervised: true, variant: 1, headed: false },
+  waitingFor: null, open: {}, showMandate: false, lastAnnounce: "",
   policy: null, receipt: null, receiptFor: undefined, verify: null, verifying: false, bench: null,
   // view 5: the approval as the service holds it (/api/approval) and the microphone
   desk: null, deskChecked: false, deskBusy: false, rec: { state: "idle", error: "" },
@@ -149,8 +156,8 @@ function allowedAddresses() {
 // its abbreviations), letter/"bis" suffixes per number ("45A", "45 Bis"),
 // quadrant ("Sur", ...), "#"/"No."/"N°"/"número", en/em dashes (a space after
 // an explicit separator), I/l/O misread for 1/1/0 in digit places, ASCII digits
-// only; up to four words after it are part of it, except the city "Bogotá"/"D.C."
-// and the shop's name when it is all that is left
+// only; up to four words after it are part of it (addrTail: complements, quadrants,
+// capitalized words; not the city "Bogotá"/"D.C." nor the shop's name when it is all that is left)
 // -> "calle 45 # 12-30", "calle 45a bis # 12-30 sur".
 const STREET_TYPES = {
   calle: "calle", cll: "calle", cl: "calle",
@@ -196,6 +203,10 @@ function addrNumber(num, suffix) {
   return ocrDigits(num) + head + (k < 0 ? "" : " bis") + (after ? " " + after : "");
 }
 const isWordStart = c => /^[\p{L}0-9]$/u.test(c);
+// Complement words: they and the word after them belong to the address.
+const COMPLEMENTS = new Set(["int", "interior", "apto", "apartamento", "apt", "ap", "torre",
+  "bloque", "bl", "casa", "local", "piso", "of", "oficina", "etapa", "manzana", "mz", "lote", "conjunto"]);
+// [folded word without dots, first character upper-case in the text]
 function addrSegment(text, i) {
   const words = [], n = text.length;
   const at = k => String.fromCodePoint(text.codePointAt(k));
@@ -206,17 +217,24 @@ function addrSegment(text, i) {
     if (ADDRESS_AT.test(text)) return words;
     let j = i;
     while (j < n && (isWordStart(at(j)) || text[j] === ".")) j += at(j).length;
-    words.push(fold(text.slice(i, j)).replace(/\./g, ""));
+    words.push([fold(text.slice(i, j)).replace(/\./g, ""), /^\p{Uppercase}$/u.test(at(i))]);
     i = j;
   }
 }
+// The words after an address that belong to it (common/address.py _tail):
+// a complement and the word after it; a quadrant or a capitalized word; cities
+// skipped; the exact shop name, or any other (lower-case) word, ends it.
 function addrTail(text, i) {
-  const out = [], words = addrSegment(text, i);
-  for (let k = 0; k < words.length; k++) {
-    if (words.slice(k).join(" ") === SHOP_WORDS.join(" ") || out.length === TAIL_MAX) break;
-    if (!CITY_WORDS.has(words[k])) out.push(words[k]);
+  const out = [], seg = addrSegment(text, i), words = seg.map(w => w[0]);
+  for (let k = 0; k < words.length && out.length < TAIL_MAX; k++) {
+    const [word, capital] = seg[k];
+    if (words.slice(k).join(" ") === SHOP_WORDS.join(" ")) break;
+    if (CITY_WORDS.has(word)) continue;
+    if (COMPLEMENTS.has(word)) { out.push(...words.slice(k, k + 2)); k++; }
+    else if (QUADRANTS.includes(word) || capital) out.push(word);
+    else break;
   }
-  return out;
+  return out.slice(0, TAIL_MAX);
 }
 function canonicalAddresses(text) {
   text = String(text == null ? "" : text).normalize("NFC");
@@ -294,6 +312,7 @@ function shot(r, frame, regions, check) {
   const f = r.frames[frame] || {};
   const img = f.image
     ? `<img src="${runUrl(f.image)}" alt="Captured screen, frame ${esc(frame)}">`
+    : PLAIN ? `<div class="noimg"><span>The agent's screen appears here</span></div>`
     : `<div class="noimg"><span>No screenshot in this event</span><span class="mono">frame ${esc(frame == null ? "—" : frame)}</span></div>`;
   const extra = check ? (check.pixels_only_text || []).map(t => t.toLowerCase()) : [];
   const boxes = (regions || []).map(g => {
@@ -359,7 +378,7 @@ function crop(label, image, readText, hash, state, note, readUnder) {
     ? `<div><img src="${runUrl(image)}" alt="${esc(label)} crop">${readUnder != null ? `<div class="note">read: <span class="mono">${esc(readUnder)}</span></div>` : ""}</div>`
     : `<div><div class="read">${esc(readText || "—")}</div><div class="note">${esc(note || "read from pixels · crop image not in this event")}</div></div>`;
   return `<div class="crop${cls}"><div class="lbl">${esc(label)}</div>` +
-         `<div class="px">${px}</div><div class="hash">sha256 ${esc(short(hash))}</div></div>`;
+         `<div class="px">${px}</div>${PLAIN ? "" : `<div class="hash">sha256 ${esc(short(hash))}</div>`}</div>`;
 }
 
 // view 1, live: record -> Voice -> policy/compile.py -> draft -> sign and use
@@ -384,7 +403,7 @@ function mandateLive(p) {
   const busy = recording || st === "transcribing" || st === "signing";
   const recBtn = recording
     ? `<button class="btn rec on" id="mstop" type="button">${ICON.dot} ${st === "starting" ? "Cancel" : "Stop"}</button>`
-    : `<button class="btn rec" id="mrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${st === "idle" ? "Record mandate" : "Record again"}</button>`;
+    : `<button class="btn rec" id="mrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${st === "idle" ? (PLAIN ? "Start recording" : "Record mandate") : "Record again"}</button>`;
   let body = "";
   if (st === "draft" || st === "signing") {
     const d = m.draft;
@@ -406,12 +425,12 @@ function mandateLive(p) {
     body = `<div class="notice ok mdone">${ICON.seal}<div><b>Signed and in use.</b> The agent now enforces this policy
         (sha256 <span class="mono">${esc(p.short_sha)}</span>, ${esc(p.path)}). The committed demo policy is unchanged.</div></div>`;
   } else if (st === "transcribing") {
-    body = `<div class="transcript wait">Sending to Voice Transcribe, then compiling the rules…</div>`;
+    body = `<div class="transcript wait">${PLAIN ? "Turning your words into rules…" : "Sending to Voice Transcribe, then compiling the rules…"}</div>`;
   } else if (recording) {
     body = `${wave(st === "recording" ? "live" : "idle")}<div class="transcript wait">Say the limits, for example: “Solo pide con entrega en la tienda, máximo ciento cincuenta mil pesos por pedido”.</div>`;
   }
   const err = m.error ? `<div class="verr">${ICON.warn}<span>${esc(m.error)}</span></div>` : "";
-  return `<div class="panel mlive" id="mlive"><header><span class="t">${ICON.mic.replace("<svg", '<svg width="16" height="16"')} Say a new mandate</span>
+  return `<div class="panel mlive" id="mlive"><header><span class="t">${ICON.mic.replace("<svg", '<svg width="16" height="16"')} ${PLAIN ? "Record new rules" : "Say a new mandate"}</span>
       <span class="r">${chipFor}</span></header>
     <div class="body">${body}<div class="vctl">${recBtn}<span class="muted small">Up to ${MAX_REC_S} s · the audio is not kept · a refused mandate changes nothing</span></div>${err}</div></div>`;
 }
@@ -450,6 +469,180 @@ function explainPanel(r) {
       <div class="xside">${zooms}${hidden}${painted}${x.reason ? `<div class="why">${esc(x.reason)}</div>` : ""}</div></div>
     <div class="xcap">${ICON.warn}<span>Computed after the run, for explanation only. During the run the pixel channel did not run,
       nothing was checked or blocked, and the outcome above is what happened.</span></div></div>`;
+}
+
+// the approval capsule: the crops, the voice and approve/deny (presenter view 5 and the demo's Watching step)
+function approvalCapsule() {
+    const r = S.runs.supervised, a = r.approval, g = r.granted;
+    const d = deskFor(a), voice = d && d.voice;
+    const img = Object.assign({}, (d && d.images) || {}, a.images || {});
+    const rec = S.rec.state;
+    // the loop's answer when it exists; before that, the service's record
+    let state = "wait";
+    if (g) state = isGranted(g) ? "approved" : (g.voice_match ? "refused" : "nomatch");
+    else if (d && d.decision) state = d.decision === "approve" ? "sending" : "refused";
+    else if (voice && rec === "idle") state = voice.match ? "match" : "nomatch";   // a new take hides the old one
+    const vchip = {
+      approved: chip("ok", ICON.check, "Approved"),
+      match: chip("ok", ICON.check, "Matches the screen"),
+      sending: chip("ok", ICON.check, "Approved · sent to the run"),
+      nomatch: chip("bad", ICON.stop, "Does not match the screen"),
+      refused: chip("bad", ICON.stop, g && g.voice_match ? "Matches · not approved" : "Denied"),
+      wait: rec === "starting" ? chip("warn", ICON.mic, "Allow the microphone…")
+        : rec === "recording" ? chip("warn", ICON.mic, "Recording…")
+        : rec === "sending" ? chip("warn", ICON.pause, "Transcribing…")
+        : chip("warn", ICON.pause, "Waiting for voice"),
+    }[state];
+    const transcript = g ? g.voice_transcript : (voice && rec === "idle" ? voice.transcript : "");
+    const waitText = rec === "recording" ? "Listening… press Stop when done."
+      : rec === "sending" ? "Sending to Voice Transcribe…" : rec === "starting" ? "Waiting for the browser to hand over the microphone…"
+      : d ? "Press Record and read the total and the destination aloud." : "No voice yet.";
+    const heard = transcript ? `<div class="transcript">“${esc(transcript)}”</div>`
+      : `<div class="transcript wait">${esc(waitText)}</div>`;
+    let diff = "";
+    if (state === "nomatch" && !g && voice) {
+      const lines = [];
+      if (voice.negated && voice.negated.length) lines.push(`Heard “${esc(voice.negated.join(" "))}”: a no or a cancel is never an approval`);
+      else if (!voice.amount_match) lines.push(voice.heard_amount == null
+        ? `Amount: ${esc(voice.amount_reason || "none heard")} · screen ${esc(cop(a.amount_cop))}`
+        : `Amount heard ${esc(cop(voice.heard_amount))} · screen ${esc(cop(a.amount_cop))}`);
+      if (!voice.address_match) lines.push(`Destination “${esc(voice.address_name)}” not heard`);
+      diff = `<div class="vdiff">${lines.map(l => `<div>${ICON.stop}<span>${l}</span></div>`).join("")}</div>`;
+    }
+    // the run is waiting for this person. Once the run's answer for this approval
+    // arrives (e.g. denied on timeout even if its closing POST failed and the
+    // service still shows the approval pending), nothing is offered any more.
+    const open = !g && !!d && !d.decision;
+    const busy = rec !== "idle" || S.deskBusy;
+    let controls = "";
+    if (open) {
+      const recBtn = rec === "recording" || rec === "starting"
+        ? `<button class="btn rec on" id="vstop" type="button">${ICON.dot} ${rec === "starting" ? "Cancel" : "Stop"}</button>`
+        : `<button class="btn rec" id="vrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${voice ? "Record again" : "Record"}</button>`;
+      const meta = voice
+        ? `Attempt ${esc(d.attempts)} · Voice Transcribe ${esc(voice.latency_ms == null ? "—" : Math.round(voice.latency_ms) + " ms")}`
+        : `Up to ${MAX_REC_S} s · the audio is not kept`;
+      controls = `<div class="vctl">${recBtn}<span class="muted small">${meta}</span></div>`;
+    } else if (!g && !d) {
+      controls = `<div class="vctl"><span class="muted small">${S.deskChecked
+        ? "This approval is not open in the interface (the run asks in its terminal, or these are test events)."
+        : "Connecting to the approval…"}</span></div>`;
+    }
+    const err = S.rec.error ? `<div class="verr">${ICON.warn}<span>${esc(S.rec.error)}</span></div>` : "";
+    const canApprove = open && voice && voice.match && !busy;
+    const done = state === "approved" || state === "sending";
+    const approveLabel = state === "approved"
+      ? ICON.check + (g.method === "passkey" ? " Approved with passkey" : " Approved · voice + click")
+      : state === "sending" ? ICON.check + " Approved · waiting for the run" : ICON.check + " Approve";
+    const why = g && !isGranted(g) && d && d.reason && sameApproval(d.event, a) ? " · " + esc(d.reason) : "";
+    const stamp = g ? `<div class="vstamp ${isGranted(g) ? "ok" : "bad"}">${isGranted(g) ? "Approved" : "Not approved"} at ${esc(time(g.ts))}${why}</div>` : "";
+    return `<div class="capsule">
+      <div class="crops">
+        ${crop("Amount", img.amount, cop(a.amount_cop), a.crops.amount)}
+        ${crop("Deliver to", img.address, a.address, a.crops.address)}
+      </div>
+      <div class="voice">
+        <div class="head">${ICON.mic} ${PLAIN ? "Read the total and the address aloud" : "Read aloud to confirm"} ${vchip}</div>
+        ${wave(rec === "recording" ? "live" : (state === "match" || done ? "" : "idle"))}
+        ${heard}${diff}${controls}${err}
+      </div>
+      <div class="decide">
+        <button class="passkey${done ? " done" : ""}" id="vapprove" ${canApprove ? "" : "disabled"} type="button">${approveLabel}</button>
+        <button class="btn deny" id="vdeny" ${open && !busy ? "" : "disabled"} type="button">${ICON.stop} Deny</button>
+      </div>${stamp}
+      <div class="fine">${PLAIN ? "Your voice confirms what you approve: the total and where the order goes, checked against the screen. It does not prove who you are."
+        : "Your voice confirms the intent: the total and where the order goes, checked against the pixels. It does not prove who you are; a passkey would, and it is optional (R8) and not used here."}</div>
+    </div>`;
+}
+
+// approved vs. on the review screen / executed (presenter view 6 and the demo's Result details)
+function afterBody(r) {
+    const vo = verifyOutcome(r), v = vo.event;
+    if (!v) return "";
+    const review = v.moment === "review";
+    const im = v.images || {}, ia = im.approved || {}, ie = im.executed || {};
+    const ra = readOf(v, "approved"), rx = readOf(v, "executed");
+    const a = r.approval || {};
+    const shown = (n, side) => {
+      const rd = side === "approved" ? ra : rx;
+      if (rd[n] != null) return n === "amount" && /^\d+$/.test(String(rd[n])) ? cop(rd[n]) : rd[n];
+      if (side === "approved") return n === "amount" ? cop(a.amount_cop) : a.address;
+      return null;
+    };
+    const cell = (n, side) => {
+      const st = side === "executed" ? fieldState(v, n) : "";
+      const txt = shown(n, side);
+      const note = st === "diff" ? "read from the pixels · differs from what was approved"
+        : st === "unread" ? "could not be read on this screen"
+        : side === "approved" ? "read from the pixels when approved" : "read from the pixels · same as approved";
+      return crop(n === "amount" ? "Amount" : "Deliver to", (side === "approved" ? ia : ie)[n],
+                   txt == null ? "—" : txt, (side === "approved" ? v.approved : v.executed)[n], st, note, txt);
+    };
+    const mchip = e => !e ? chip("off", ICON.dot, "not reached")
+      : e.status === "match" ? chip("ok", ICON.check, "Match")
+      : e.status === "cannot_verify" ? chip("warn", ICON.ask, "Could not verify")
+      : chip("bad", ICON.stop, "Mismatch");
+    const moments = `<div class="moments">
+        <div><span class="muted small">1 · Review screen, before confirming</span>${mchip(vo.review)}</div>
+        <div><span class="muted small">2 · Result, after the click</span>${vo.kind === "blocked" || (vo.kind === "cannot" && review)
+          ? chip("off", ICON.dot, "never happened") : mchip(vo.result)}</div></div>`;
+    const order = r.order;
+    const record = order ? `<div class="muted small" style="margin-top:8px">Portal record: ${esc(cop(order.amount_cop))} → <span class="mono">${esc(order.address)}</span></div>` : "";
+    const diffs = diffFields(v);
+    let stamp, verdict;
+    if (vo.kind === "blocked") {
+      stamp = `<span class="stamp bad">${ICON.stop}Blocked at review</span>`;
+      verdict = `${chip("bad", ICON.stop, "Order not confirmed", true)}
+        <div class="why">The review screen did not show what you approved (${esc(diffs.join(" and ") || "a field")} changed). The confirm click never happened.</div>`;
+    } else if (vo.kind === "flagged") {
+      stamp = `<span class="stamp bad">${ICON.stop}MISMATCH</span>`;
+      verdict = `${chip("bad", ICON.stop, "Flagged for review", true)}
+        <div class="why">What executed is not what you approved (${esc(diffs.join(" and ") || "a field")}). The receipt is marked.</div>${record}`;
+    } else if (vo.kind === "cannot") {
+      stamp = `<span class="stamp warn">${ICON.ask}Could not verify</span>`;
+      verdict = `${chip("warn", ICON.ask, review ? "Order not confirmed" : "Flagged for review", true)}
+        <div class="why">${esc(cannotReason(v))}. ${review ? "Without a clear match the confirm click is not made." : "The receipt is marked for a person to check."}</div>${review ? "" : record}`;
+    } else if (vo.kind === "verified") {
+      stamp = `<span class="stamp ok">${ICON.check}VERIFIED</span>`;
+      verdict = `${chip("ok", ICON.check, "Order confirmed", true)}
+        <div class="why">Executed = approved, read in pixels${vo.review ? " on the review screen and after the click" : " after the click"}.</div>${record}`;
+    } else {
+      stamp = `<span class="stamp info">${ICON.pause}Review matches</span>`;
+      verdict = `${chip("info", ICON.pause, "Confirming · waiting for the result", true)}`;
+    }
+    return moments + `<div class="after">
+        <div><h2>Approved</h2><div class="stack">${cell("amount", "approved")}${cell("address", "approved")}</div></div>
+        <div><h2>${review ? "On the review screen" : "Executed"}</h2><div class="stack">${cell("amount", "executed")}${cell("address", "executed")}</div></div>
+      </div>
+      <div class="outcome">${stamp}<div>${verdict}</div></div>`;
+}
+
+// the screen with the boxes, and page code vs. pixels (presenter view 4 and the demo's Result details)
+function divergeBody(r) {
+    const c = r.check;
+    let verdict, why = c.reason || "";
+    const codeOnly = c.code_only_text || [], pxOnly = c.pixels_only_text || [];
+    if (c.status === "ok") verdict = chip("ok", ICON.check, "Code and pixels agree", true);
+    else if (c.status === "cannot_verify") verdict = chip("warn", ICON.ask, "Cannot verify — blocked until a human checks", true);
+    else if (c.status === "policy_violation") verdict = chip("bad", ICON.stop, "Policy violation — blocked", true);
+    else verdict = chip("bad", ICON.stop, pxOnly.length ? "Mismatch: visible text not in page code" : "Mismatch: hidden text in page code", true);
+    const col = (lines, tag) => lines.length
+      ? lines.map(t => `<div class="line diff">${esc(t)}<span class="tag">${esc(tag)}</span></div>`).join("")
+      : `<div class="line muted">No text missing from the other side</div>`;
+    const blocked = c.status !== "ok";
+    return `<div class="split">
+      <div class="panel"><header><span class="t">Captured screen</span><span>frame ${esc(c.frame)}</span>
+        <span class="r">${chip("info", ICON.eye, (c.regions || []).length + " regions found")}</span></header>${shot(r, c.frame, c.regions, c)}</div>
+      <div class="panel">
+        <div class="verdict">${verdict}${why ? `<div class="why">${esc(why)}</div>` : ""}
+          ${c.status === "cannot_verify" ? `<button class="passkey" disabled style="margin-top:14px">${ICON.ask} Ask a human</button>` : ""}</div>
+        <div class="cols">
+          <div><h3>What the page code says</h3>${col(codeOnly, "in the page code · not on screen")}</div>
+          <div><h3>What the pixels show</h3>${col(pxOnly, "on screen · not in the page code")}</div>
+        </div>
+        <div class="foot"><span>Pixel check ${esc(c.latency_ms)} ms</span>
+          <span>${blocked ? "Action blocked before the click" : (r.approval ? "Order sent to the person for approval" : "Action allowed")}</span></div>
+      </div></div>`;
 }
 
 // -- views ---------------------------------------------------------------
@@ -546,178 +739,21 @@ const render = {
     const head = `<h1 class="title">What the page code says vs. what the pixels show</h1>
       <p class="lede">An independent pixel channel reads the screen. If it disagrees with the page code, or cannot read it, the action is blocked before the click.</p>`;
     if (!c) return head + empty("No check yet", "The first action the agent proposes is checked here.");
-    let verdict, why = c.reason || "";
-    const codeOnly = c.code_only_text || [], pxOnly = c.pixels_only_text || [];
-    if (c.status === "ok") verdict = chip("ok", ICON.check, "Code and pixels agree", true);
-    else if (c.status === "cannot_verify") verdict = chip("warn", ICON.ask, "Cannot verify — blocked until a human checks", true);
-    else if (c.status === "policy_violation") verdict = chip("bad", ICON.stop, "Policy violation — blocked", true);
-    else verdict = chip("bad", ICON.stop, pxOnly.length ? "Mismatch: visible text not in page code" : "Mismatch: hidden text in page code", true);
-    const col = (lines, tag) => lines.length
-      ? lines.map(t => `<div class="line diff">${esc(t)}<span class="tag">${esc(tag)}</span></div>`).join("")
-      : `<div class="line muted">No text missing from the other side</div>`;
-    const blocked = c.status !== "ok";
-    return head + `<div class="split">
-      <div class="panel"><header><span class="t">Captured screen</span><span>frame ${esc(c.frame)}</span>
-        <span class="r">${chip("info", ICON.eye, (c.regions || []).length + " regions found")}</span></header>${shot(r, c.frame, c.regions, c)}</div>
-      <div class="panel">
-        <div class="verdict">${verdict}${why ? `<div class="why">${esc(why)}</div>` : ""}
-          ${c.status === "cannot_verify" ? `<button class="passkey" disabled style="margin-top:14px">${ICON.ask} Ask a human</button>` : ""}</div>
-        <div class="cols">
-          <div><h3>What the page code says</h3>${col(codeOnly, "in the page code · not on screen")}</div>
-          <div><h3>What the pixels show</h3>${col(pxOnly, "on screen · not in the page code")}</div>
-        </div>
-        <div class="foot"><span>Pixel check ${esc(c.latency_ms)} ms</span>
-          <span>${blocked ? "Action blocked before the click" : (r.approval ? "Order sent to the person for approval" : "Action allowed")}</span></div>
-      </div></div>`;
+    return head + divergeBody(r);
   },
-
   approve() {
-    const r = S.runs.supervised, a = r.approval, g = r.granted;
+    const a = S.runs.supervised.approval;
     const head = `<h1 class="title">Approve what will really happen</h1>
       <p class="lede">Exact crops of the screen — not the agent's summary. Read them aloud, then approve.</p>`;
     if (!a) return head + empty("No approval requested", "An order that passes every check stops here for the person before it is confirmed.");
-    const d = deskFor(a), voice = d && d.voice;
-    const img = Object.assign({}, (d && d.images) || {}, a.images || {});
-    const rec = S.rec.state;
-    // the loop's answer when it exists; before that, the service's record
-    let state = "wait";
-    if (g) state = isGranted(g) ? "approved" : (g.voice_match ? "refused" : "nomatch");
-    else if (d && d.decision) state = d.decision === "approve" ? "sending" : "refused";
-    else if (voice && rec === "idle") state = voice.match ? "match" : "nomatch";   // a new take hides the old one
-    const vchip = {
-      approved: chip("ok", ICON.check, "Approved"),
-      match: chip("ok", ICON.check, "Matches the screen"),
-      sending: chip("ok", ICON.check, "Approved · sent to the run"),
-      nomatch: chip("bad", ICON.stop, "Does not match the screen"),
-      refused: chip("bad", ICON.stop, g && g.voice_match ? "Matches · not approved" : "Denied"),
-      wait: rec === "starting" ? chip("warn", ICON.mic, "Allow the microphone…")
-        : rec === "recording" ? chip("warn", ICON.mic, "Recording…")
-        : rec === "sending" ? chip("warn", ICON.pause, "Transcribing…")
-        : chip("warn", ICON.pause, "Waiting for voice"),
-    }[state];
-    const transcript = g ? g.voice_transcript : (voice && rec === "idle" ? voice.transcript : "");
-    const waitText = rec === "recording" ? "Listening… press Stop when done."
-      : rec === "sending" ? "Sending to Voice Transcribe…" : rec === "starting" ? "Waiting for the browser to hand over the microphone…"
-      : d ? "Press Record and read the total and the destination aloud." : "No voice yet.";
-    const heard = transcript ? `<div class="transcript">“${esc(transcript)}”</div>`
-      : `<div class="transcript wait">${esc(waitText)}</div>`;
-    let diff = "";
-    if (state === "nomatch" && !g && voice) {
-      const lines = [];
-      if (voice.negated && voice.negated.length) lines.push(`Heard “${esc(voice.negated.join(" "))}”: a no or a cancel is never an approval`);
-      else if (!voice.amount_match) lines.push(voice.heard_amount == null
-        ? `Amount: ${esc(voice.amount_reason || "none heard")} · screen ${esc(cop(a.amount_cop))}`
-        : `Amount heard ${esc(cop(voice.heard_amount))} · screen ${esc(cop(a.amount_cop))}`);
-      if (!voice.address_match) lines.push(`Destination “${esc(voice.address_name)}” not heard`);
-      diff = `<div class="vdiff">${lines.map(l => `<div>${ICON.stop}<span>${l}</span></div>`).join("")}</div>`;
-    }
-    // the run is waiting for this person. Once the run's answer for this approval
-    // arrives (e.g. denied on timeout even if its closing POST failed and the
-    // service still shows the approval pending), nothing is offered any more.
-    const open = !g && !!d && !d.decision;
-    const busy = rec !== "idle" || S.deskBusy;
-    let controls = "";
-    if (open) {
-      const recBtn = rec === "recording" || rec === "starting"
-        ? `<button class="btn rec on" id="vstop" type="button">${ICON.dot} ${rec === "starting" ? "Cancel" : "Stop"}</button>`
-        : `<button class="btn rec" id="vrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${voice ? "Record again" : "Record"}</button>`;
-      const meta = voice
-        ? `Attempt ${esc(d.attempts)} · Voice Transcribe ${esc(voice.latency_ms == null ? "—" : Math.round(voice.latency_ms) + " ms")}`
-        : `Up to ${MAX_REC_S} s · the audio is not kept`;
-      controls = `<div class="vctl">${recBtn}<span class="muted small">${meta}</span></div>`;
-    } else if (!g && !d) {
-      controls = `<div class="vctl"><span class="muted small">${S.deskChecked
-        ? "This approval is not open in the interface (the run asks in its terminal, or these are test events)."
-        : "Connecting to the approval…"}</span></div>`;
-    }
-    const err = S.rec.error ? `<div class="verr">${ICON.warn}<span>${esc(S.rec.error)}</span></div>` : "";
-    const canApprove = open && voice && voice.match && !busy;
-    const done = state === "approved" || state === "sending";
-    const approveLabel = state === "approved"
-      ? ICON.check + (g.method === "passkey" ? " Approved with passkey" : " Approved · voice + click")
-      : state === "sending" ? ICON.check + " Approved · waiting for the run" : ICON.check + " Approve";
-    const why = g && !isGranted(g) && d && d.reason && sameApproval(d.event, a) ? " · " + esc(d.reason) : "";
-    const stamp = g ? `<div class="vstamp ${isGranted(g) ? "ok" : "bad"}">${isGranted(g) ? "Approved" : "Not approved"} at ${esc(time(g.ts))}${why}</div>` : "";
-    return head + `<div class="capsule">
-      <div class="crops">
-        ${crop("Amount", img.amount, cop(a.amount_cop), a.crops.amount)}
-        ${crop("Deliver to", img.address, a.address, a.crops.address)}
-      </div>
-      <div class="voice">
-        <div class="head">${ICON.mic} Read aloud to confirm ${vchip}</div>
-        ${wave(rec === "recording" ? "live" : (state === "match" || done ? "" : "idle"))}
-        ${heard}${diff}${controls}${err}
-      </div>
-      <div class="decide">
-        <button class="passkey${done ? " done" : ""}" id="vapprove" ${canApprove ? "" : "disabled"} type="button">${approveLabel}</button>
-        <button class="btn deny" id="vdeny" ${open && !busy ? "" : "disabled"} type="button">${ICON.stop} Deny</button>
-      </div>${stamp}
-      <div class="fine">Your voice confirms the intent: the total and where the order goes, checked against the pixels.
-        It does not prove who you are; a passkey would, and it is optional (R8) and not used here.</div>
-    </div>`;
+    return head + approvalCapsule();
   },
 
   after() {
-    const r = S.runs.supervised, vo = verifyOutcome(r), v = vo.event;
     const head = `<h1 class="title">Checked again before and after the click</h1>
       <p class="lede">What is about to execute, and what executed, is read again in pixels and compared with what was approved.</p>`;
-    if (!v) return head + empty("Nothing to compare yet", "After an approved order, the review screen and the result are compared here.");
-    const review = v.moment === "review";
-    const im = v.images || {}, ia = im.approved || {}, ie = im.executed || {};
-    const ra = readOf(v, "approved"), rx = readOf(v, "executed");
-    const a = r.approval || {};
-    const shown = (n, side) => {
-      const rd = side === "approved" ? ra : rx;
-      if (rd[n] != null) return n === "amount" && /^\d+$/.test(String(rd[n])) ? cop(rd[n]) : rd[n];
-      if (side === "approved") return n === "amount" ? cop(a.amount_cop) : a.address;
-      return null;
-    };
-    const cell = (n, side) => {
-      const st = side === "executed" ? fieldState(v, n) : "";
-      const txt = shown(n, side);
-      const note = st === "diff" ? "read from the pixels · differs from what was approved"
-        : st === "unread" ? "could not be read on this screen"
-        : side === "approved" ? "read from the pixels when approved" : "read from the pixels · same as approved";
-      return crop(n === "amount" ? "Amount" : "Deliver to", (side === "approved" ? ia : ie)[n],
-                   txt == null ? "—" : txt, (side === "approved" ? v.approved : v.executed)[n], st, note, txt);
-    };
-    const mchip = e => !e ? chip("off", ICON.dot, "not reached")
-      : e.status === "match" ? chip("ok", ICON.check, "Match")
-      : e.status === "cannot_verify" ? chip("warn", ICON.ask, "Could not verify")
-      : chip("bad", ICON.stop, "Mismatch");
-    const moments = `<div class="moments">
-        <div><span class="muted small">1 · Review screen, before confirming</span>${mchip(vo.review)}</div>
-        <div><span class="muted small">2 · Result, after the click</span>${vo.kind === "blocked" || (vo.kind === "cannot" && review)
-          ? chip("off", ICON.dot, "never happened") : mchip(vo.result)}</div></div>`;
-    const order = r.order;
-    const record = order ? `<div class="muted small" style="margin-top:8px">Portal record: ${esc(cop(order.amount_cop))} → <span class="mono">${esc(order.address)}</span></div>` : "";
-    const diffs = diffFields(v);
-    let stamp, verdict;
-    if (vo.kind === "blocked") {
-      stamp = `<span class="stamp bad">${ICON.stop}Blocked at review</span>`;
-      verdict = `${chip("bad", ICON.stop, "Order not confirmed", true)}
-        <div class="why">The review screen did not show what you approved (${esc(diffs.join(" and ") || "a field")} changed). The confirm click never happened.</div>`;
-    } else if (vo.kind === "flagged") {
-      stamp = `<span class="stamp bad">${ICON.stop}MISMATCH</span>`;
-      verdict = `${chip("bad", ICON.stop, "Flagged for review", true)}
-        <div class="why">What executed is not what you approved (${esc(diffs.join(" and ") || "a field")}). The receipt is marked.</div>${record}`;
-    } else if (vo.kind === "cannot") {
-      stamp = `<span class="stamp warn">${ICON.ask}Could not verify</span>`;
-      verdict = `${chip("warn", ICON.ask, review ? "Order not confirmed" : "Flagged for review", true)}
-        <div class="why">${esc(cannotReason(v))}. ${review ? "Without a clear match the confirm click is not made." : "The receipt is marked for a person to check."}</div>${review ? "" : record}`;
-    } else if (vo.kind === "verified") {
-      stamp = `<span class="stamp ok">${ICON.check}VERIFIED</span>`;
-      verdict = `${chip("ok", ICON.check, "Order confirmed", true)}
-        <div class="why">Executed = approved, read in pixels${vo.review ? " on the review screen and after the click" : " after the click"}.</div>${record}`;
-    } else {
-      stamp = `<span class="stamp info">${ICON.pause}Review matches</span>`;
-      verdict = `${chip("info", ICON.pause, "Confirming · waiting for the result", true)}`;
-    }
-    return head + moments + `<div class="after">
-        <div><h2>Approved</h2><div class="stack">${cell("amount", "approved")}${cell("address", "approved")}</div></div>
-        <div><h2>${review ? "On the review screen" : "Executed"}</h2><div class="stack">${cell("amount", "executed")}${cell("address", "executed")}</div></div>
-      </div>
-      <div class="outcome">${stamp}<div>${verdict}</div></div>`;
+    if (!verifyOutcome(S.runs.supervised).event) return head + empty("Nothing to compare yet", "After an approved order, the review screen and the result are compared here.");
+    return head + afterBody(S.runs.supervised);
   },
 
   receipt() {
@@ -838,7 +874,12 @@ const render = {
 // -- data the views read from files ----------------------------------------
 async function getJSON(url, opts) {
   const r = await fetch(url, opts);
-  if (!r.ok) { const t = await r.json().catch(() => ({})); throw new Error(t.detail || r.statusText); }
+  if (!r.ok) {
+    const t = await r.json().catch(() => ({}));
+    const err = new Error(typeof t.detail === "string" ? t.detail : r.statusText || "request failed");
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 }
 async function loadFor(i) {
@@ -847,20 +888,23 @@ async function loadFor(i) {
     if ((key === "mandate" || key === "nosup") && !S.policy) { S.policy = await getJSON("/api/policy"); draw(); }
     if (key === "bench") { S.bench = await getJSON("/api/bench"); draw(); }
     if (key === "approve") loadDesk();
-    if (key === "receipt") {
-      const ev = S.runs.supervised.receipt;
-      const path = ev && ev.path ? ev.path : "";
-      if (S.receiptFor !== path || !S.receipt) {
-        forgetReceipt(); S.receiptFor = path; draw();
-        const seq = S.loadSeq;
-        let got;
-        try { got = await getJSON("/api/receipt?path=" + encodeURIComponent(path)); }
-        catch (err) { got = { error: err.message }; }
-        if (seq !== S.loadSeq) return;          // a newer run or receipt replaced it
-        S.receipt = got; draw();
-      }
-    }
+    if (key === "receipt") await loadReceipt(false);
   } catch (err) { console.error(err); }
+}
+// The supervised run's receipt (by the path in receipt.signed). `ownOnly`: the
+// demo shows only this run's receipt, never the newest file under runs/.
+async function loadReceipt(ownOnly) {
+  const ev = S.runs.supervised.receipt;
+  const path = ev && ev.path ? ev.path : "";
+  if (ownOnly && !path) return;
+  if (S.receiptFor === path && S.receipt) return;
+  forgetReceipt(); S.receiptFor = path; draw();
+  const seq = S.loadSeq;
+  let got;
+  try { got = await getJSON("/api/receipt?path=" + encodeURIComponent(path)); }
+  catch (err) { got = { error: err.message }; }
+  if (seq !== S.loadSeq) return;          // a newer run or receipt replaced it
+  S.receipt = got; draw();
 }
 async function runVerify() {
   if (!S.receipt || !S.receipt.path || S.verifying) return;
@@ -1045,93 +1089,3 @@ function wavBase64(chunks, rate) {
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
-
-// -- navigation and drawing --------------------------------------------------
-function viewFromHash() {
-  const n = parseInt((location.hash || "").replace(/\D/g, ""), 10);
-  return Number.isInteger(n) && n >= 0 && n < VIEWS.length ? n : 0;
-}
-function go(i) {
-  i = Math.max(0, Math.min(VIEWS.length - 1, i));
-  if (location.hash !== "#/" + i) history.replaceState(null, "", "#/" + i);
-  S.view = i; draw(); loadFor(i);
-}
-function follow(i) { if (S.auto) S.pendingView = i; }
-
-function hasNews(i) {
-  const r = S.runs.supervised;
-  return { 2: r.log.length, 3: S.runs.no_supervisor.log.length, 4: r.check, 5: r.approval,
-           6: r.verify, 7: r.receipt }[i];
-}
-
-// the run a view is about: view 3 is the unsupervised run, 2 and 4-7 the supervised one
-function runFor(i) {
-  if (i === 3) return S.runs.no_supervisor;
-  if (i >= 2 && i <= 7) return S.runs.supervised;
-  return run();
-}
-
-function draw() {
-  const r = runFor(S.view), st = agentState(r);
-  document.getElementById("topbar").classList.toggle("off", r.mode === "no_supervisor");
-  document.getElementById("runinfo").textContent = r.mode ? `${r.scenario || ""}${r.variant ? " v" + r.variant : ""}` : "";
-  document.getElementById("agentstate").innerHTML = chip(st.cls, st.icon, st.text);
-  document.getElementById("nav").innerHTML = VIEWS.map((v, i) =>
-    `<a href="#/${i}" ${i === S.view ? 'aria-current="page"' : ""}><span class="n">${i || "·"}</span>${esc(v.name)}${hasNews(i) && i !== S.view ? '<span class="dot"></span>' : ""}</a>`).join("");
-  const auto = document.getElementById("auto");
-  auto.textContent = S.auto ? "Follow: on" : "Follow: off";
-  auto.setAttribute("aria-pressed", String(S.auto));
-  const conn = document.getElementById("conn");
-  conn.className = "conn " + (S.conn === "live" ? "live" : S.conn === "down" ? "down" : "");
-  conn.textContent = S.conn === "live" ? "Live" : S.conn === "down" ? "Reconnecting" : "Connecting";
-  document.getElementById("testdata").hidden = !S.test;
-  const v = document.getElementById("view");
-  v.innerHTML = `<div class="wrap">${render[VIEWS[S.view].key]()}</div>` +
-    `<div class="keys"><kbd>←</kbd><kbd>→</kbd> views · <kbd>0</kbd>–<kbd>8</kbd> jump · <kbd>A</kbd> follow</div>`;
-  const btn = document.getElementById("runverify");
-  if (btn) btn.onclick = runVerify;
-  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
-  on("vrec", startRecording); on("vstop", () => stopRecording(false));
-  on("vapprove", () => decide("approve")); on("vdeny", () => decide("deny"));
-  on("mrec", startMandate); on("mstop", () => stopMandate(false));
-  on("msign", signMandate); on("mdiscard", discardMandate);
-}
-
-// -- live events -------------------------------------------------------------
-let backoff = 500;
-function connect() {
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onopen = () => { S.conn = "live"; backoff = 500; draw(); };
-  ws.onmessage = m => {
-    const e = JSON.parse(m.data);
-    S.pendingView = undefined;
-    if (e.type === "hub.history") {
-      S.runs = { supervised: freshRun(), no_supervisor: freshRun() };
-      S.current = null; S.test = false;
-      e.events.forEach(x => apply(x, () => {}));   // replay without jumping views
-    } else {
-      apply(e, follow);
-    }
-    if (S.pendingView !== undefined && S.pendingView !== S.view) go(S.pendingView);
-    else {
-      draw();
-      const reload = ["receipt.signed", "hub.reset", "hub.history", "run.started"];
-      if (VIEWS[S.view].key === "receipt" && reload.includes(e.type)) loadFor(S.view);
-    }
-  };
-  ws.onclose = () => { S.conn = "down"; draw(); setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 8000); };
-}
-
-window.addEventListener("hashchange", () => go(viewFromHash()));
-document.addEventListener("keydown", e => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === "ArrowRight") go(S.view + 1);
-  else if (e.key === "ArrowLeft") go(S.view - 1);
-  else if (/^[0-8]$/.test(e.key)) go(Number(e.key));
-  else if (e.key === "a" || e.key === "A") { S.auto = !S.auto; draw(); }
-});
-document.getElementById("auto").onclick = () => { S.auto = !S.auto; draw(); };
-
-getJSON("/api/policy").then(p => { S.policy = p; draw(); }).catch(err => console.error(err));
-go(S.view);
-connect();

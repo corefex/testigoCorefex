@@ -13,7 +13,7 @@ receipt.json and evidence crops there (F9; `testigo verify` checks them).
 Supervised runs classify clicks with SAM (R4) and check the sensitive ones with
 the real pixel channel (F4). An order confirmation that passes needs the person (F7, R8):
 
-  --approve-in interface  view 5 of the interface (http://127.0.0.1:8090/#/5):
+  --approve-in interface  the demo's Watching step (http://127.0.0.1:8090/#/demo/watch):
                           read the total and the destination aloud, Voice Transcribe
                           checks it against the pixels, then click Approve.
                           No decision within --approval-timeout -> denied.
@@ -172,7 +172,7 @@ def main(argv=None):
     crops = CropFiles(pixels, run_dir)
     approver = choose_approver(args.approve_in, args.approval_timeout, crops)
     sink = _Tee(run_dir / "events.jsonl", default_sink())
-    print("approval: %s" % ("interface, view 5 (%s/#/5)" % service_url()
+    print("approval: %s" % ("interface (%s/#/demo/watch)" % service_url()
                             if isinstance(approver, ServiceApprover) else "console"))
     try:
         with open_portal(args.scenario, args.variant, pixel_channel=crops,

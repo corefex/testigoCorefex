@@ -17,7 +17,12 @@ Routes
                      the active policy (RUNS_DIR/policy/active.policy.yaml)
   GET  /api/receipt  the newest receipt.json under runs/, or ?path= (view 7)
   POST /api/verify   runs the real `testigo verify` on that receipt (view 7)
-  GET  /api/bench    runs/bench_results.json, or "not available" (view 8)
+  GET  /api/bench    runs/bench_results.json, else the newest committed
+                     results/witnessbench-*.json, or "not available"
+  POST /api/run      {scenario, variant?, supervised, explain?, headed?}: start one
+                     real run (`agent.run` as a subprocess); 409 while one runs
+  GET  /api/run      the run started here: idle | running | finished | failed | cancelled
+  POST /api/run/cancel  stop that run
   GET  /runs/<path>  screenshots and crops (PNG/JPEG only) from runs/
 
 Approval (F7, view 5; see approval/desk.py)
@@ -54,7 +59,9 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import threading
 import wave
+from collections import deque
 from pathlib import Path
 
 from urllib.parse import urlsplit
@@ -607,15 +614,182 @@ def api_verify(request: Request, path: str = ""):
     return {"command": "testigo verify %s" % _rel(p), "output": out, "exit_code": code}
 
 
+RESULTS_DIR = config.ROOT / "results"
+
+
+def bench_file():
+    """runs/bench_results.json (the latest WitnessBench run on this machine), else
+    the newest committed copy in results/, else None."""
+    p = runs_dir() / "bench_results.json"
+    if p.is_file():
+        return p, "runs/bench_results.json"
+    committed = sorted(Path(RESULTS_DIR).glob("witnessbench-*.json"))
+    if committed:
+        return committed[-1], "results/" + committed[-1].name
+    return None, None
+
+
 @app.get("/api/bench")
 def api_bench():
-    p = runs_dir() / "bench_results.json"
-    if not p.is_file():
+    p, label = bench_file()
+    if p is None:
         return {"available": False}
     try:
-        return {"available": True, "data": json.loads(p.read_text(encoding="utf-8"))}
+        return {"available": True, "source": label,
+                "data": json.loads(p.read_text(encoding="utf-8"))}
     except ValueError:
-        return {"available": False, "error": "bench_results.json is not valid JSON"}
+        return {"available": False, "source": label, "error": "%s is not valid JSON" % p.name}
+
+
+# -- start a run from the interface ------------------------------------------
+#
+# One real run at a time: `python -m agent.run` as a child process, exactly as
+# from the terminal (it spends Meta credits). The argv is built here from
+# validated values only, never from strings the page sent, and never through a
+# shell. Its events reach the page the usual way (POST /events, then /ws); this
+# only reports whether the process is alive and the last lines it printed.
+
+RUN_SCENARIOS = ("clean", "a1", "a2", "a3")
+RUN_KEYS = {"scenario", "variant", "supervised", "explain", "headed"}
+RUN_TAIL_LINES = 40
+RUN_STOP_TIMEOUT_S = 5
+
+
+def start_process(argv, env):
+    """Start the run. Tests replace this function; they never start a real run."""
+    return subprocess.Popen(argv, cwd=config.ROOT, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, errors="replace")
+
+
+def run_argv(scenario, variant, supervised, explain, headed):
+    argv = [sys.executable, "-m", "agent.run", "--scenario", scenario,
+            "--variant", str(variant), "--approve-in", "interface"]
+    if not supervised:
+        argv.append("--no-supervisor")
+        if explain:
+            argv.append("--explain")
+    if headed:
+        argv.append("--headed")
+    return argv
+
+
+def _flag(body, key, default):
+    v = body.get(key, default)
+    if not isinstance(v, bool):
+        raise HTTPException(422, "%s must be true or false" % key)
+    return v
+
+
+def run_request(body):
+    """The validated run, or 422."""
+    extra = set(body) - RUN_KEYS
+    if extra:
+        raise HTTPException(422, "unknown field: %s" % ", ".join(sorted(extra)))
+    scenario = body.get("scenario")
+    if not isinstance(scenario, str) or scenario not in RUN_SCENARIOS:
+        raise HTTPException(422, "scenario must be one of %s" % ", ".join(RUN_SCENARIOS))
+    variant = body.get("variant", 1)
+    if not isinstance(variant, int) or isinstance(variant, bool) or not 1 <= variant <= 5:
+        raise HTTPException(422, "variant must be a whole number from 1 to 5")
+    if "supervised" not in body:
+        raise HTTPException(422, "supervised (true or false) is required")
+    supervised = _flag(body, "supervised", True)
+    explain = _flag(body, "explain", not supervised)
+    if supervised and explain:
+        raise HTTPException(422, "explain is only for runs without TESTIGO+")
+    headed = _flag(body, "headed", False)
+    return {"scenario": scenario, "variant": variant, "supervised": supervised,
+            "explain": explain, "headed": headed}
+
+
+class RunManager:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+        self.info = None
+        self.tail = deque(maxlen=RUN_TAIL_LINES)
+
+    def busy(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def view(self):
+        with self.lock:
+            if self.info is None:
+                return {"state": "idle"}
+            return dict(self.info, tail=list(self.tail))
+
+    def start(self, req, port=None):
+        with self.lock:
+            if self.busy():
+                raise HTTPException(409, "a run is already in progress")
+            env = dict(os.environ)
+            if port:
+                env["INTERCEPTOR_PORT"] = str(port)     # the child reports to this service
+            argv = run_argv(**req)
+            self.tail.clear()
+            try:
+                proc = start_process(argv, env)
+            except OSError as e:
+                raise HTTPException(500, "could not start the run: %s" % type(e).__name__)
+            self.proc = proc
+            self.info = dict(req, state="running", started=clock.iso(), ended=None,
+                             exit_code=None, mode="supervised" if req["supervised"] else "no_supervisor")
+        threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
+        return self.view()
+
+    def _watch(self, proc):
+        try:
+            for line in proc.stdout or ():
+                with self.lock:
+                    if self.proc is proc:
+                        self.tail.append(line.rstrip("\n")[:300])
+        except (OSError, ValueError):
+            pass
+        code = proc.wait()
+        with self.lock:
+            if self.proc is proc and self.info["state"] == "running":
+                self.info.update(state="finished" if code == 0 else "failed",
+                                 exit_code=code, ended=clock.iso())
+
+    def cancel(self):
+        with self.lock:
+            proc = self.proc
+            if proc is None or proc.poll() is not None:
+                return False
+            self.info.update(state="cancelled", ended=clock.iso())
+        proc.terminate()
+        try:
+            proc.wait(timeout=RUN_STOP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        with self.lock:
+            self.info["exit_code"] = proc.returncode
+        return True
+
+
+runs = RunManager()
+
+
+@app.post("/api/run")
+async def api_run_start(request: Request):
+    local_only(request)
+    req = run_request(await json_body(request, MAX_JSON_BYTES))
+    return runs.start(req, port=request.url.port)
+
+
+@app.get("/api/run")
+def api_run_status(request: Request):
+    local_only(request)
+    return runs.view()
+
+
+@app.post("/api/run/cancel")
+async def api_run_cancel(request: Request):
+    local_only(request)
+    await json_body(request, MAX_JSON_BYTES)
+    cancelled = await run_in_threadpool(runs.cancel)
+    return dict(runs.view(), cancelled=cancelled)
 
 
 # -- F0 status page ---------------------------------------------------------

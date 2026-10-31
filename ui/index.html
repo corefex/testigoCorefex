@@ -4,25 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TESTIGO+</title>
+<meta name="description" content="TESTIGO+ reads the screen in pixels and stops an AI agent's order unless it matches the rules you said out loud. Simulation only.">
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
-<header class="topbar" id="topbar">
-  <div class="brand">
-    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="currentColor"/><circle cx="12" cy="11" r="3.2" fill="#fff"/><circle cx="12" cy="11" r="1.4" fill="currentColor"/></svg>
-    <span class="wordmark">TESTIGO<b>+</b></span>
-  </div>
-  <div class="runinfo" id="runinfo"></div>
-  <div class="agentstate" id="agentstate"></div>
-  <nav class="views" id="nav" aria-label="Views"></nav>
-  <button class="auto" id="auto" type="button" title="Follow events (A)"></button>
-  <span class="conn" id="conn"></span>
-</header>
-<div class="testdata" id="testdata" hidden>
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3Zm0 6v5m0 3v.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
-  <b>Test data.</b> These events come from the offline fixtures, not a real run. Do not record them for the video.
-</div>
-<main id="view" class="view"></main>
+<a class="skip" id="skip" href="#main">Skip to content</a>
+<div id="app"></div>
+<div id="announce" class="sr-only" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">TESTIGO+ needs JavaScript to show the live demo.</p></noscript>
 <script src="/ui/app.js"></script>
+<script src="/ui/flow.js"></script>
 </body>
 </html>

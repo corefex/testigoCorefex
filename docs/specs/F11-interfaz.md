@@ -4,6 +4,8 @@
 
 Concreta la fila F11 del spec general: las vistas del lienzo de diseño, conectadas a los eventos en vivo del sistema. La interfaz no decide nada ni llama a modelos; solo muestra lo que los demás emiten. Si algo aquí contradice a `00-spec-general.md`, `01-spec-construccion.md` o `02-spec-vistas-maquetas.md`, mandan esos. Todo es simulación.
 
+> **31 oct, rediseño:** la consola de 9 pestañas confundía a quien llegaba por primera vez. Ahora hay una portada y un recorrido guiado de cuatro pasos que arranca corridas desde la página (§8). Las 9 vistas siguen en `#/present`, sin enlace, para grabar el video.
+>
 > **1 nov (R2):** las vistas antes contaban un pago; ahora cuentan un pedido y su dirección de entrega (`03-revision-31-oct.md` §10). Los textos de las vistas siguen a `02-spec-vistas-maquetas.md`.
 
 ## Decisiones pendientes
@@ -90,7 +92,7 @@ No hay código de interfaz todavía. F0 dejó el servicio del interceptor (`inte
 Hecho y probado offline (`tests/test_ui.py`, `agent/test_loop.py`); las 9 vistas se revisaron en el navegador a 1440×900 con eventos de prueba.
 
 - **Transporte (F11-D1).** El loop publica cada evento en un *sink* (`interceptor/sink.py`, `HttpSink` → `POST /events`). El servicio guarda la corrida en memoria (`interceptor/hub.py`) y la reenvía por `WS /ws`: primero el historial (una página que abre tarde lo ve todo) y luego cada evento nuevo. `POST /events` y `/events/reset` solo aceptan conexiones locales. El sink es de mejor esfuerzo: si el servicio está caído, la corrida y el veredicto no cambian (hay prueba).
-- **Interfaz (F11-D2).** `ui/index.html`, `ui/app.css`, `ui/app.js`: HTML, CSS y JS estáticos servidos en `/`, sin build. La vista actual va en la URL (`#/4`); flechas y teclas 0–8 para navegar, `A` para seguir los eventos.
+- **Interfaz (F11-D2).** `ui/index.html`, `ui/app.css`, `ui/app.js`: HTML, CSS y JS estáticos servidos en `/`, sin build. La vista actual va en la URL (hoy `#/present/4`, ver §8); flechas y teclas 0–8 para navegar, `A` para seguir los eventos.
 - **Archivos.** `GET /api/policy` (vista 1; la política activa, `common.config.policy_path()`), `POST /api/mandate/draft` y `POST /api/mandate/sign` (vista 1 en vivo, F1), `GET /api/receipt` (el `receipt.json` más reciente bajo `runs/`, o `?path=`), `POST /api/verify` (corre el `testigo verify` real como subproceso y devuelve su salida, criterio 4), `GET /api/bench` (`runs/bench_results.json` o «no disponible», criterio 5), `GET /runs/<ruta>` (solo PNG/JPEG, sin salir de `runs/`).
 - **Datos de prueba.** `python -m tests.demos.ui_replay a3 --both` reproduce corridas de los fixtures con `test_data: true`, y la interfaz muestra una franja «Test data — no grabar». No sirve para el video.
 - **Estado (F11-D4).** La página no guarda nada; reconstruye todo desde los eventos. Guarda por separado la corrida sin supervisor (vista 3) y la supervisada (vistas 2, 4–7).
@@ -146,3 +148,32 @@ Los valores de arriba son la forma, no resultados. Si el archivo no existe o no 
 - Vista 1 en vivo: hecha (1 nov). «Record mandate» → Voice → `policy/compile.py` → borrador junto a la política en uso → «Sign and use» la firma con la llave del dueño y la vuelve la activa (`RUNS_DIR/policy/active.policy.yaml`, F1). Estados: idle, recording, transcribing, draft, refused, signed. Falta probarla con micrófono y claves reales.
 - Vista 3 zoom: hecho (1 nov) con `agent.run --no-supervisor --explain` (F3): `explain.result` trae el cuadro, las regiones y las líneas divergentes; la vista dibuja la caja y un acercamiento (recorte por CSS de la captura) con el aviso «calculado después de la corrida, solo para explicar». El texto escondido en el código (A1) no tiene caja: se muestra la línea. Falta correrlo con modelos reales.
 - Vista 5: el passkey real (WebAuthn) es F7; hoy el botón refleja `approval.granted`.
+
+## 8. Portada y recorrido guiado (31 oct)
+
+Problema: 9 pestañas («Cover», «Mandate», …), un botón «Follow», atajos de teclado y estados vacíos que mandaban a la terminal. Quien llegaba no sabía por dónde empezar y no podía arrancar nada desde la página.
+
+**Rutas** (`ui/flow.js`; `ui/app.js` conserva estado, ayudas, aprobación, mandato y las vistas del presentador):
+
+| Ruta | Qué es |
+| --- | --- |
+| `#/` | Portada (diseño aprobado del lienzo): qué es TESTIGO+, los 3 ataques, cómo funciona, WitnessBench y «Try the demo». `#/how` y `#/attacks` bajan a su sección. |
+| `#/demo/rules` | 1 Tus reglas: la política firmada en palabras simples; «Use these rules» (principal) o «Record new rules» (el flujo de mandato en vivo de siempre). |
+| `#/demo/run` | 2 Correr el agente: 4 tarjetas (normal, orden escondida en el código, orden pintada en una imagen, dirección cambiada al final), interruptor «Protect with TESTIGO+» (encendido por defecto) y «Run the agent». Versión 1–5 y ventana visible en «More options». |
+| `#/demo/watch` | 3 Mirando: la última captura y una línea de tiempo en lenguaje simple; si TESTIGO+ pide aprobación, la cápsula (recortes, voz, aprobar/negar) aparece ahí mismo. |
+| `#/demo/result` | 4 Resultado: un solo desenlace grande (bloqueado y por qué, entregado en tu tienda, entregado al atacante, el agente se detuvo solo, error), la comparación con la otra corrida del mismo escenario, el recibo con «Verify receipt», y la evidencia (código vs. píxeles, aprobado vs. ejecutado, dónde estaba el ataque, todos los pasos) detrás de desplegables. «Run another» y «Compare without TESTIGO+». |
+| `#/results` | WitnessBench simple: las tres cifras y una tabla por escenario y modo. |
+| `#/present[/0-8]` | Las 9 vistas de antes, para grabar. Sin enlace en la navegación; `#/N` viejos llevan ahí. |
+
+Las cifras de la portada y de `#/results` salen de `GET /api/bench` (`runs/bench_results.json`, o la copia versionada más nueva `results/witnessbench-*.json`), nunca escritas a mano: «9 de 10» = filas supervisadas de a1/a2 bloqueadas; «0 de 15» = `attacks_succeed_with/without` (si alguna es > 0 cambia el texto); «1 de 5» = `false_positives`; la mediana por chequeo = `per_check_latency_ms.median`.
+
+**Arrancar una corrida** (`interceptor/service.py`):
+
+- `POST /api/run {scenario, variant?, supervised, explain?, headed?}` lanza `python -m agent.run` como subproceso con una lista argv (nunca shell): `--scenario --variant --approve-in interface`, más `--no-supervisor --explain` sin supervisor y `--headed` si se pide. `INTERCEPTOR_PORT` del hijo = el puerto del servicio. Validación estricta: escenario en `clean|a1|a2|a3`, variante entero 1–5, booleanos de verdad, sin campos extra, `explain` solo sin supervisor. Una corrida a la vez (409).
+- `GET /api/run`: `idle | running | finished | failed | cancelled`, código de salida y las últimas 40 líneas impresas (en memoria, sin archivos).
+- `POST /api/run/cancel`: termina el proceso (y lo mata a los 5 s).
+- Mismas protecciones que las demás escrituras: Host local, Origin propio, JSON, solo loopback.
+
+**Buenas prácticas aplicadas:** botones y enlaces reales, etiquetas en cada control, foco visible, foco al título al cambiar de paso, `aria-live` con el estado de la corrida, contraste ≥ 4.5:1 (`--faint` pasó a `#6B6A66`), sin scroll horizontal a 375 px, estados de carga, vacío y error en cada paso, y la nota «simulation only» en el pie y en el paso 2. La jerga (SAM, hashes, `cannot_verify`, F8) solo aparece dentro de los desplegables y en el presentador.
+
+**Pruebas:** `tests/test_ui.py` (Chromium) cubre portada, resultados, los 4 pasos y los desenlaces con eventos de prueba; `tests/test_service.py` cubre `/api/run` con un proceso falso. Ninguna prueba corre el agente real ni llama a Meta.

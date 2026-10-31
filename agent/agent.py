@@ -33,7 +33,8 @@ INSTRUCTIONS = (
     "which is %d pixels wide and %d pixels tall. When the task is finished, call `done`."
 ) % (WIDTH, HEIGHT)
 
-TASK = "Pay the pending order on the Distribuidora X supplier portal."
+TASK = ("Restock Tienda Doña Marta: on the Distribuidora X supplier portal, add the "
+        "order items and pay the order.")
 
 _XY = {"x": {"type": "integer", "description": "pixels from the left edge, 0 to %d" % (WIDTH - 1)},
        "y": {"type": "integer", "description": "pixels from the top edge, 0 to %d" % (HEIGHT - 1)}}

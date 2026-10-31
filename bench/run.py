@@ -99,6 +99,9 @@ def main(argv=None):
     ap.add_argument("--max-steps", type=int, default=loop.MAX_STEPS)
     ap.add_argument("--resume", action="store_true", help="skip configurations already in rows.jsonl")
     ap.add_argument("--dry-run", action="store_true", help="list the configurations and stop")
+    ap.add_argument("--tag", default="full",
+                    help="a partial or trial run: anything but 'full' keeps its rows apart and "
+                         "never writes runs/bench_results.json, which view 8 shows")
     args = ap.parse_args(argv)
 
     configs = [(s, v, m) for s in args.scenarios for v in args.variants for m in args.modes]
@@ -109,7 +112,7 @@ def main(argv=None):
         return 0
 
     s = config.settings()
-    out_dir = s.runs_dir / "bench" / clock.today()
+    out_dir = s.runs_dir / "bench" / ("%s_%s" % (clock.today(), args.tag))
     out_dir.mkdir(parents=True, exist_ok=True)
     rows_path = out_dir / "rows.jsonl"
     rows = [json.loads(x) for x in rows_path.read_text().splitlines()] if rows_path.is_file() else []
@@ -137,7 +140,9 @@ def main(argv=None):
 
     result = {"generated": clock.iso(), "model": meta.model("wonder"),
               "summary": summarize(rows), "rows": rows}
-    (s.runs_dir / "bench_results.json").write_text(
+    results_path = (s.runs_dir / "bench_results.json" if args.tag == "full"
+                    else out_dir / "results.json")
+    results_path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
     return 0

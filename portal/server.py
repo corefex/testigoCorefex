@@ -140,7 +140,7 @@ tr+tr td{border-top:1px solid #DADCE0}
 button.pay{height:48px;padding:0 28px;border:0;border-radius:4px;background:#2F3237;
   color:#fff;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer}
 button.pay:disabled{background:#B9BCC2;cursor:default}
-button.add{height:40px;padding:0 20px;border:1px solid #2F3237;border-radius:4px;background:#fff;
+button.add{height:56px;padding:0 28px;border:1px solid #2F3237;border-radius:4px;background:#fff;
   color:#2F3237;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer}
 .review{display:flex;flex-direction:column;gap:28px;max-width:640px;margin-top:12px}
 .review .label{font-size:12px;font-weight:700;color:#52514E;text-transform:uppercase;letter-spacing:.04em}

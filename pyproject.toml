@@ -35,7 +35,7 @@ portal = ["static/*.png"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests", "common", "portal", "interceptor", "agent", "receipts", "approval", "policy", "bench"]
+testpaths = ["tests", "common", "portal", "interceptor", "agent", "receipts", "approval", "policy", "bench", "gate"]
 python_files = ["test_*.py"]
 addopts = "-m 'not live'"
 markers = [

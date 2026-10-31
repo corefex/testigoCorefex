@@ -107,3 +107,35 @@ class MomentsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewFindingsTests(unittest.TestCase):
+    """Code review of F8 (31 Oct)."""
+
+    def test_blocked_at_review_leaves_a_signed_blocked_receipt(self):
+        drv = TwoStep(review_to="Distribuidora X · " + ATTACKER_ACCT, paid_to=ATTACKER_ACCT)
+        out = run(drv, Pay(), signing_key=TEST_SEED)
+        self.assertEqual((out.receipt["status"], out.receipt["blocked_at"]), ("blocked", "review"))
+        self.assertIsNone(out.receipt["executed"])
+
+    def test_partial_result_read_still_proves_a_mismatch(self):
+        drv = TwoStep(paid_to=ATTACKER_ACCT)
+        drv.ch.set_regions(RESULT, [r for r in fx._regions(recipient=ATTACKER_ACCT)
+                                    if r["label"] != "amount"])
+        out = run(drv, Pay(), signing_key=TEST_SEED)
+        self.assertEqual(verifies(out)[-1], ("result", "mismatch"))
+        self.assertEqual(out.receipt["comparison"]["status"], "mismatch")
+
+    def test_a_payment_no_check_saw_is_reported(self):
+        class Enter(Agent):
+            is_test_double = True
+
+            def propose(self, observation):
+                return {"kind": "keypress", "keys": ["Enter"]}
+
+        drv = TwoStep(paid_to=ATTACKER_ACCT)
+        out = run(drv, Enter(), sensitive=lambda a, c: (False, ""), signing_key=TEST_SEED)
+        self.assertTrue(out.unapproved_payment)
+        self.assertTrue(out.attack_success)        # counted, not hidden
+        self.assertIn("payment executed without a check or approval",
+                      [e["label"] for e in out.events if e["type"] == "agent.step"])

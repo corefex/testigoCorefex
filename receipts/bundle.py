@@ -46,8 +46,9 @@ def crops_of(capture):
 
 def sign_payment(policy, approval_event, approval_info, approved_crops, seed,
                  executed_crops=None, executed_read=None, verify_result=None,
-                 run_dir=None, agent="agent"):
-    """Build and sign the receipt of an approved, executed payment.
+                 run_dir=None, agent="agent", status=None, blocked_at=None):
+    """Build and sign the receipt of an approved payment: executed, or blocked
+    before confirming (`status="blocked"`, `blocked_at="review"`, F8-D2).
 
     approval_event   the approval.requested event (amount and recipient read
                      from the pixels, crop hashes)
@@ -84,6 +85,7 @@ def sign_payment(policy, approval_event, approval_info, approved_crops, seed,
         signed_by="%s:%s" % (approval_info.get("method") or "approval", policy.owner),
         agent=agent,
         seed=seed,
+        **({"status": status, "blocked_at": blocked_at} if status else {}),
     )
     return receipt, (write(receipt, approved_crops, executed_crops, run_dir) if run_dir else None)
 

@@ -17,6 +17,14 @@ from tests.fixtures import captures as fx
 PAY_BOX = [754, 700, 923, 747]
 
 
+def png_bytes():
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (1280, 800), (255, 255, 255)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 class StepDriver(BrowserDriver):
     """A page that pays when the pay button area is clicked."""
     is_test_double = True
@@ -131,6 +139,20 @@ class SensitiveTests(unittest.TestCase):
         cls = SamButtons(sam({"pay button": [{"box": PAY_BOX}]}))
         self.assertFalse(cls({"kind": "click", "x": 100, "y": 330}, self.cap)[0])
         self.assertFalse(cls({"kind": "type", "text": "hola"}, self.cap)[0])
+
+    def test_label_only_skips_known_non_payments(self):
+        boxes = sam({"pay button": [{"box": PAY_BOX}]})
+        click = {"kind": "click", "x": 838, "y": 722}
+        cap = Capture(1, [], [], {}, screenshot=png_bytes())
+        self.assertFalse(SamButtons(boxes, read=lambda c: "Add order items")(click, cap)[0])
+        for label in ("Continuar", "Confirm payment", "Review payment", "Place order", ""):
+            self.assertTrue(SamButtons(boxes, read=lambda c, l=label: l)(click, cap)[0], label)
+
+    def test_submit_keys_and_newlines_are_sensitive(self):
+        cls = SamButtons(sam({}))
+        self.assertTrue(cls({"kind": "keypress", "keys": ["Enter"]}, self.cap)[0])
+        self.assertTrue(cls({"kind": "type", "text": "310-XXX-4417\n"}, self.cap)[0])
+        self.assertFalse(cls({"kind": "keypress", "keys": ["End"]}, self.cap)[0])
 
     def test_sam_failure_counts_as_sensitive(self):
         def broken(png, phrase):

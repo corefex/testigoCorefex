@@ -417,5 +417,23 @@ class NormReadTests(unittest.TestCase):
         self.assertIsNone(norm_read("recipient", None))
 
 
+class ReadNormalizationTests(unittest.TestCase):
+    """Review of F8: what a reader may return for the same value compares equal."""
+
+    def test_accounts(self):
+        from receipts.receipt import norm_read
+        same = ["310-XXX-4417", "310 XXX 4417", "310\u2013XXX\u20134417", "310-***-4417",
+                "310-XXX-44I7", "PAY TO (NEQUI ACCOUNT) 310-xxx-4417 Distribuidora X"]
+        for s in same:
+            self.assertEqual(norm_read("recipient", s), "310-xxx-4417", s)
+        self.assertNotEqual(norm_read("recipient", "300-XXX-0000"), "310-xxx-4417")
+
+    def test_amounts(self):
+        from receipts.receipt import norm_read
+        for s in ("COP 120,000", "$120.000,00", "120000", "Total COP 120,000 Simulation"):
+            self.assertEqual(norm_read("amount", s), "120000", s)
+        self.assertNotEqual(norm_read("amount", "COP 125,000"), "120000")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

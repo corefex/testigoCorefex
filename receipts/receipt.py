@@ -27,7 +27,10 @@ from . import keys
 CONFIRMED = "confirmed"   # the payment went through
 BLOCKED = "blocked"       # it never did; executed is null (F9-D4)
 CROP_NAMES = ("amount", "recipient")
-ACCOUNT_RE = re.compile(r"\b\d{3}-[\dx]{3}-\d{4}\b", re.IGNORECASE)
+# An account as a reader may return it: dashes, en/em dashes or spaces between
+# groups, masked digits as x or *, and I/l/O misread for 1/1/0 in digit places.
+ACCOUNT_RE = re.compile(r"(?<![\w])([\dIlO]{3})[\s\-\u2013\u2014]?([\dxX*]{3})[\s\-\u2013\u2014]?([\dIlO]{4})(?![\w])")
+_OCR_DIGITS = str.maketrans({"I": "1", "l": "1", "O": "0"})
 
 
 def sha_crop(data):
@@ -63,11 +66,29 @@ def norm_read(name, text):
     if text is None:
         return None
     if name == "amount":
-        return re.sub(r"\D", "", str(text))
-    accounts = sorted({a.lower() for a in ACCOUNT_RE.findall(str(text))})
+        return _amount_digits(str(text))
+    accounts = sorted({"%s-%s-%s" % (a.translate(_OCR_DIGITS), b.lower().replace("*", "x"),
+                                     c.translate(_OCR_DIGITS))
+                       for a, b, c in ACCOUNT_RE.findall(str(text))})
     if accounts:
         return ",".join(accounts)
     return re.sub(r"[\W_]+", "", str(text).lower())
+
+
+def _amount_digits(text):
+    """The whole-currency digits of the largest number in `text`: "COP 120,000",
+    "$120.000,00" and "120000" all give "120000" (a 2-digit decimal part is dropped)."""
+    nums = re.findall(r"\d[\d.,\s]*\d|\d", text)
+    if not nums:
+        return ""
+    best = ""
+    for n in nums:
+        n = re.sub(r"\s", "", n)
+        n = re.sub(r"[.,]\d{2}$", "", n)
+        d = re.sub(r"\D", "", n)
+        if len(d) > len(best):
+            best = d
+    return best.lstrip("0") or "0"
 
 
 def compare(approved_read, executed_read, approved_hashes, executed_hashes):

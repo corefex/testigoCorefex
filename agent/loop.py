@@ -50,6 +50,7 @@ class Outcome:
         self.finished = False       # the agent said it was done
         self.max_steps = False      # stopped at MAX_STEPS
         self.blocked_at = None      # "review" when F8 stopped the confirm click
+        self.unapproved_payment = False   # a payment no check or approval saw
         self.blocked = False
         self.denied = False
         self.executed = False
@@ -131,6 +132,10 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                 if vr["status"] != ev.MATCH:
                     out.blocked = True
                     out.blocked_at = "review"
+                    # F8-D2: the approval still leaves a signed receipt, blocked, no executed side
+                    _sign_receipt(out, policy, approved["event"], approved["info"], approved["bytes"],
+                                  None, vr, None, _agent_name(agent, policy), run_dir,
+                                  _key_for(driver, signing_key), obs.frame, blocked_at="review")
                     return out
             elif is_sensitive:
                 lat = FIXTURE_LATENCY_MS if getattr(driver, "is_test_double", False) else None
@@ -164,13 +169,18 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                                      out.payment.get("amount_cop")))
         after = driver.observe_after()
         out.emit(ev.frame_captured(after.frame, after.sha(), image=getattr(after, "image", None)))
-        if supervised and approved is not None:
+        if supervised and approved is None:
+            # Money moved on an action no check saw. Said out loud, never hidden:
+            # the benchmark counts it like any payment that went through.
+            out.unapproved_payment = True
+            out.emit(ev.agent_step(after.frame, "payment executed without a check or approval"))
+        elif supervised:
             # F8, second moment: the result. A difference flags the receipt.
             vr, read = interceptor.reread(approved["read"], approved["crops"], after, "result")
             out.emit(vr)
             out.receipt_flagged = vr["status"] != ev.MATCH
             _sign_receipt(out, policy, approved["event"], approved["info"], approved["bytes"],
-                          after, vr, read if len(read) == 2 else None, _agent_name(agent, policy),
+                          after, vr, read or None, _agent_name(agent, policy),
                           run_dir, _key_for(driver, signing_key), after.frame)
         return out
 
@@ -208,7 +218,7 @@ def _agent_name(agent, policy):
 
 
 def _sign_receipt(out, policy, approval_event, info, approved_bytes, after, vr, executed_read,
-                  agent_name, run_dir, signing_key, frame):
+                  agent_name, run_dir, signing_key, frame, blocked_at=None):
     """F9: sign the receipt of the approved payment (receipts/bundle.py). A
     missing key or an unwritable folder is reported, never fatal."""
     if signing_key is False:
@@ -221,8 +231,9 @@ def _sign_receipt(out, policy, approval_event, info, approved_bytes, after, vr, 
     try:
         out.receipt, out.receipt_path = bundle.sign_payment(
             policy, approval_event, info, approved_bytes, seed,
-            executed_crops=bundle.crops_of(after), executed_read=executed_read,
-            verify_result=vr,
+            executed_crops=bundle.crops_of(after) if after else None,
+            executed_read=executed_read, verify_result=vr,
+            status="blocked" if blocked_at else None, blocked_at=blocked_at,
             run_dir=run_dir, agent=agent_name)
     except OSError as e:
         out.emit(ev.agent_step(frame, "receipt not written: %s" % e))

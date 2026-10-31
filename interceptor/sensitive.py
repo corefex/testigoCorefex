@@ -12,9 +12,14 @@ executed, so cost and latency grow only on the steps that matter.
 BUTTONS = ("pay button", "confirm button")
 
 
-# What a protected button says. SAM also calls other buttons a "pay button"
-# (it marked "Add order items" with 0.56 on 31 Oct), so the label is read too.
-PAY_WORDS = ("pay", "confirm", "review payment", "pagar", "paga", "confirmar", "transfer", "send")
+# SAM also calls other buttons a "pay button" (it marked "Add order items" with
+# 0.56 on 31 Oct). A box is skipped only when its label, read from the pixels,
+# is one of these known non-payment actions; anything else stays sensitive, so
+# drawing the confirm button as "Continuar" does not dodge the check (review F8).
+NOT_PAYMENT = ("add order items", "add items", "add to cart", "agregar", "añadir",
+               "back", "volver", "cancel", "cancelar")
+# Keys that submit a focused form: as sensitive as clicking its button.
+SUBMIT_KEYS = ("enter", "return", "space", " ")
 
 
 class SamButtons:
@@ -29,9 +34,15 @@ class SamButtons:
 
     def __call__(self, action, capture):
         """(sensitive, reason). A SAM failure counts as sensitive: in doubt, check."""
-        if action.get("kind") == "pay":
+        kind = action.get("kind")
+        if kind == "pay":
             return True, "payment action"
-        if action.get("kind") not in ("click", "double_click"):
+        if kind == "keypress" and any(k.strip().lower() in SUBMIT_KEYS or k == " "
+                                      for k in action.get("keys", [])):
+            return True, "a key that submits the form (%s)" % "+".join(action["keys"])
+        if kind == "type" and "\n" in action.get("text", ""):
+            return True, "typed text that submits the form"
+        if kind not in ("click", "double_click"):
             return False, ""
         x, y = action["x"], action["y"]
         for phrase in self.phrases:
@@ -54,9 +65,9 @@ class SamButtons:
         except Exception as e:  # noqa: BLE001 - in doubt, check
             return True, "click on %s (label unreadable: %s)" % (phrase, type(e).__name__)
         t = " ".join(str(label or "").lower().split())
-        if any(w in t for w in PAY_WORDS):
-            return True, "click on %s %r" % (phrase, label)
-        return False, "button %r is not a payment" % label
+        if t and any(t == w or t.startswith(w + " ") for w in NOT_PAYMENT):
+            return False, "button %r is not a payment" % label
+        return True, "click on %s %r" % (phrase, label)
 
 
 def payment_only(action, capture):

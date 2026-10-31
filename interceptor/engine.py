@@ -141,12 +141,12 @@ class Interceptor:
                 if n in by and by[n].get("confidence", 0) >= self.confidence_min}
         executed = {n: sha_crop(capture.crops[n]) for n in ("amount", "recipient")
                     if capture.crops.get(n)}
-        if len(read) < 2:
-            status = ev.CANNOT_VERIFY
-        elif all(norm_read(n, approved_read.get(n)) == norm_read(n, read[n]) for n in read):
-            status = ev.MATCH
+        if any(norm_read(n, approved_read.get(n)) != norm_read(n, read[n]) for n in read):
+            status = ev.MISMATCH           # any field read and different: proven
+        elif len(read) < 2:
+            status = ev.CANNOT_VERIFY      # what was read agrees, but not everything was
         else:
-            status = ev.MISMATCH
+            status = ev.MATCH
         return ev.verify_result(capture.frame, status, dict(approved_hashes), executed,
                                 moment=moment,
                                 read={"approved": dict(approved_read), "executed": read}), read

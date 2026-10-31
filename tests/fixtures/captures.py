@@ -113,4 +113,6 @@ def channel_for(name):
         ch.set_regions(164, _regions(recipient=ATTACKER))
     else:
         ch.set_regions(150, _regions())
+        # after the click (frame 164): a3 paid the attacker, the rest the supplier
+        ch.set_regions(164, _regions(recipient=ATTACKER if name == "a3" else SUPPLIER))
     return ch

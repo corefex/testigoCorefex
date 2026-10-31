@@ -128,6 +128,29 @@ class Interceptor:
             status = ev.MISMATCH
         return ev.verify_result(executed_capture.frame, status, dict(approved_crops), executed)
 
+    def reread(self, approved_read, approved_hashes, capture, moment):
+        """F8: read amount and recipient again and compare with what was approved.
+
+        Compared by the values read from the pixels (receipts.receipt.norm_read:
+        the amount's digits, the recipient's account numbers), because crops of
+        unchanged content never hash the same across two real captures. The
+        hashes travel along as evidence. Returns (verify.result event, read)."""
+        from receipts.receipt import norm_read
+        by = {r["label"]: r for r in self.pixels.read_regions(capture)}
+        read = {n: by[n]["text"] for n in ("amount", "recipient")
+                if n in by and by[n].get("confidence", 0) >= self.confidence_min}
+        executed = {n: sha_crop(capture.crops[n]) for n in ("amount", "recipient")
+                    if capture.crops.get(n)}
+        if len(read) < 2:
+            status = ev.CANNOT_VERIFY
+        elif all(norm_read(n, approved_read.get(n)) == norm_read(n, read[n]) for n in read):
+            status = ev.MATCH
+        else:
+            status = ev.MISMATCH
+        return ev.verify_result(capture.frame, status, dict(approved_hashes), executed,
+                                moment=moment,
+                                read={"approved": dict(approved_read), "executed": read}), read
+
     # -- helpers ------------------------------------------------------------
 
     def _confidence_gaps(self, by_label):

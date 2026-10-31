@@ -108,7 +108,11 @@ def approval_granted(method, voice_transcript, voice_match, granted=True, ts=Non
     }
 
 
-def verify_result(frame, status, approved, executed, images=None, ts=None):
+def verify_result(frame, status, approved, executed, images=None, ts=None,
+                  moment=None, read=None):
+    """F8. `moment`: "review" (before confirming; a mismatch blocks) or "result"
+    (after the click; a mismatch flags the receipt). `read`: the values read
+    from the pixels, {"approved": {...}, "executed": {...}}."""
     e = {
         "type": "verify.result", "frame": frame, "ts": _ts(ts),
         "status": status,
@@ -117,6 +121,10 @@ def verify_result(frame, status, approved, executed, images=None, ts=None):
     }
     if images:
         e["images"] = images
+    if moment:
+        e["moment"] = moment
+    if read:
+        e["read"] = read
     return e
 
 

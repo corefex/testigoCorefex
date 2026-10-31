@@ -189,6 +189,13 @@ class SamSparkChannel(PixelChannel):
                             "confidence": conf if got else 0.0})
         return out
 
+    def read_label(self, crop_png):
+        """The text of one crop (a button's label), read alone in the fixed schema."""
+        got = self._spark_json(crop_png, CROP_PROMPT, CROP_SCHEMA)
+        if got is None:
+            raise ValueError("label out of schema")
+        return got["text"]
+
     def _refine(self, png, box, w, h):
         """SAM with a box prompt around Spark's rough box; the best match or None."""
         x1, y1, x2, y2 = clamp(box, w, h)

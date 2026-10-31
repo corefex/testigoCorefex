@@ -96,15 +96,23 @@ class LoopReceiptTests(unittest.TestCase):
         signed = [e for e in out.events if e["type"] == "receipt.signed"][-1]
         self.assertNotIn("path", signed)
 
-    def test_pending_after_click_still_signs(self):
-        class NoAfterCrops(FixtureDriver):
+    def test_unreadable_result_still_signs_as_pending(self):
+        # F8: the result cannot be read -> cannot_verify, receipt flagged and pending
+        class NoAfterRead(FixtureDriver):
+            def pixel_channel(self):
+                ch = super().pixel_channel()
+                ch._by_frame.pop(164, None)
+                return ch
+
             def observe_after(self):
                 cap = super().observe_after()
                 cap.crops = {}
                 return cap
 
-        out = run(NoAfterCrops("clean"), ScriptedAgent(), run_dir=self.dir, signing_key=self.seed)
-        self.assertIn("verify after the click: pending (F8)", _steps(out))
+        out = run(NoAfterRead("clean"), ScriptedAgent(), run_dir=self.dir, signing_key=self.seed)
+        vr = [e for e in out.events if e["type"] == "verify.result"][-1]
+        self.assertEqual((vr["moment"], vr["status"]), ("result", "cannot_verify"))
+        self.assertTrue(out.receipt_flagged)
         self.assertIsNone(out.receipt["executed"])
         self.assertEqual(out.receipt["comparison"]["status"], "pending")
         self.assertFalse((self.dir / "executed_amount.png").exists())

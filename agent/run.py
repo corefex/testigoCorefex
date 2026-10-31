@@ -84,11 +84,12 @@ def main(argv=None):
     agent = WonderAgent(meta, tool=args.model)
     spent0 = meta.spent_usd()
     try:
-        with open_portal(args.scenario, args.variant, pixel_channel=SamSparkChannel(meta),
+        pixels = SamSparkChannel(meta)
+        with open_portal(args.scenario, args.variant, pixel_channel=pixels,
                          run_dir=run_dir, headless=not args.headed) as driver:
             out = loop.run(driver, agent, supervised=supervised, approver=ConsoleApprover(),
                            sink=_Tee(run_dir / "events.jsonl", default_sink()),
-                           sensitive=SamButtons(meta.segment), max_steps=args.max_steps,
+                           sensitive=SamButtons(meta.segment, read=pixels.read_label), max_steps=args.max_steps,
                            run_dir=run_dir)
     finally:
         (run_dir / "agent_raw.json").write_text(

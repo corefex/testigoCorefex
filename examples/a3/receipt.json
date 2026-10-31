@@ -1,24 +1,40 @@
 {
-  "id": "rcpt_2041_7f3a",
-  "time": "2026-10-28T09:16:05-05:00",
+  "id": "rcpt_20261031_174528_6be6",
+  "time": "2026-10-31T17:45:28-05:00",
   "agent": "wonder@marta-shop",
-  "action": "pay 120000 COP -> Distribuidora X · 310-XXX-4417",
+  "action": "confirm order COP 120,000 -> deliver to Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
   "amount_cop": 120000,
-  "recipient": "Distribuidora X · 310-XXX-4417",
-  "policy_sha256": "0c46e7272685f8a11c48d3c93e8a1379fc74c3543dfd6107fb825f32fc74f18f",
+  "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
+  "policy_sha256": "e83de2e784bca58b6c701c977838c38cab1824ff81b3646cea518c962bb3de37",
   "approved": {
-    "amount": "bf14a4f393e17ed11089edd1b2c39ff648b6c4a85b58958ff9c1f472260b3f68",
-    "recipient": "9e352ee34173fcf7fb8fd8539e866f6280176fa8bde1342c0babc91b4d92334e"
+    "amount": "23502194223a2391848247bf520274b04085d782c15d84173774e538afd0353f",
+    "address": "58ad714cc17eaac863f4182ce5038e035eab31614776cecb86c8649210f3074e"
   },
   "executed": {
-    "amount": "bf14a4f393e17ed11089edd1b2c39ff648b6c4a85b58958ff9c1f472260b3f68",
-    "recipient": "0a5a529b1da0ccc6b31ee2922b8d9b8b49429cb06066b9a2f57723f5521e758d"
+    "amount": "23502194223a2391848247bf520274b04085d782c15d84173774e538afd0353f",
+    "address": "779549a3bb30f8dccee6dea69f75975d70a2d1788bc977a16066cd1d4f0bb077"
   },
+  "status": "confirmed",
   "approval": {
     "method": "passkey",
-    "voice_transcript": "ciento veinte mil pesos a Distribuidora X"
+    "voice_transcript": "ciento veinte mil pesos, entrega en Tienda Doña Marta",
+    "voice_match": true
   },
   "signed_by": "passkey:marta",
-  "pubkey": "454b6db4fe7f85d1bfd21975bc5b10937064396eb7d981ed334fa28d390f8d53",
-  "signature": "ed25519:368ca6fcbbca5e69f9df2c131ae2f61278e49794dca604d6cbd8561fd6983133887ad70560b84c05dd8de1cb1649917fb676e98e6d3a068ba76e9b85ff61ac08"
+  "read": {
+    "approved": {
+      "amount": "120000",
+      "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"
+    },
+    "executed": {
+      "amount": "120000",
+      "address": "Bodega Norte · Carrera 80 # 7-15, Bogotá"
+    }
+  },
+  "comparison": {
+    "status": "mismatch",
+    "by": "read"
+  },
+  "pubkey": "cdbc37ce6a951725b156be636d547c25c93e9ec84ad6d6accea71c3bf5df0113",
+  "signature": "ed25519:f79d08ffc33db0573878c3cbb59f83dc97a74c32f8ecf81e00752d6e6006595df991fd544845b4f83a8aba9e271a22c62027f9644d4d854202d6a2741d4d570d"
 }

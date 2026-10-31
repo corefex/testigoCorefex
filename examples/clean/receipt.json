@@ -1,24 +1,40 @@
 {
-  "id": "rcpt_2041_7f3a",
-  "time": "2026-10-28T09:16:05-05:00",
+  "id": "rcpt_20261031_174528_3c53",
+  "time": "2026-10-31T17:45:28-05:00",
   "agent": "wonder@marta-shop",
-  "action": "pay 120000 COP -> Distribuidora X · 310-XXX-4417",
+  "action": "confirm order COP 120,000 -> deliver to Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
   "amount_cop": 120000,
-  "recipient": "Distribuidora X · 310-XXX-4417",
-  "policy_sha256": "0c46e7272685f8a11c48d3c93e8a1379fc74c3543dfd6107fb825f32fc74f18f",
+  "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
+  "policy_sha256": "e83de2e784bca58b6c701c977838c38cab1824ff81b3646cea518c962bb3de37",
   "approved": {
-    "amount": "bf14a4f393e17ed11089edd1b2c39ff648b6c4a85b58958ff9c1f472260b3f68",
-    "recipient": "9e352ee34173fcf7fb8fd8539e866f6280176fa8bde1342c0babc91b4d92334e"
+    "amount": "23502194223a2391848247bf520274b04085d782c15d84173774e538afd0353f",
+    "address": "58ad714cc17eaac863f4182ce5038e035eab31614776cecb86c8649210f3074e"
   },
   "executed": {
-    "amount": "bf14a4f393e17ed11089edd1b2c39ff648b6c4a85b58958ff9c1f472260b3f68",
-    "recipient": "9e352ee34173fcf7fb8fd8539e866f6280176fa8bde1342c0babc91b4d92334e"
+    "amount": "23502194223a2391848247bf520274b04085d782c15d84173774e538afd0353f",
+    "address": "58ad714cc17eaac863f4182ce5038e035eab31614776cecb86c8649210f3074e"
   },
+  "status": "confirmed",
   "approval": {
     "method": "passkey",
-    "voice_transcript": "ciento veinte mil pesos a Distribuidora X"
+    "voice_transcript": "ciento veinte mil pesos, entrega en Tienda Doña Marta",
+    "voice_match": true
   },
   "signed_by": "passkey:marta",
-  "pubkey": "454b6db4fe7f85d1bfd21975bc5b10937064396eb7d981ed334fa28d390f8d53",
-  "signature": "ed25519:692c7f5964e5f48de9aed3c7ee2c0625db13d29b8405a2d26a3d80bf45b99c8b47a7f43704ea1c55a6d4fb32d5007b3765afb1a610bdf84c645fbcc848cb4f0f"
+  "read": {
+    "approved": {
+      "amount": "120000",
+      "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"
+    },
+    "executed": {
+      "amount": "120000",
+      "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"
+    }
+  },
+  "comparison": {
+    "status": "match",
+    "by": "read"
+  },
+  "pubkey": "cdbc37ce6a951725b156be636d547c25c93e9ec84ad6d6accea71c3bf5df0113",
+  "signature": "ed25519:a2cf1419500412701f873c96e870345577f57d1e2ec9e90c31c93207b1c8f4f3c82f4f7d5647eda6feb86bf06bd6db1d87974d1208be6bbcc7b11cdcfd901b0f"
 }

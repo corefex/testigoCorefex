@@ -25,14 +25,6 @@ POLICY = str(POLICY_PATH)
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
-def examples_current():
-    """The published examples/ carry this version's crop names (R2: amount and
-    address). Until they are replaced after a real run they may predate it."""
-    from .receipt import CROP_NAMES
-    return all((EXAMPLES / n / ("approved_%s.png" % c)).is_file()
-               for n in ("clean", "a3") for c in CROP_NAMES)
-
-
 _SYNTHETIC = []
 
 
@@ -221,12 +213,31 @@ class ReadValueTests(unittest.TestCase):
 
 
 class ExamplesTests(unittest.TestCase):
-    """The published examples keep verifying with the old (hash-only) format."""
+    """The published examples (scripts/make_examples.py) keep verifying."""
 
-    @unittest.skipUnless(examples_current(), "examples/ predates R2 (delivery address); "
-                                             "it is replaced after a real run")
     def test_examples(self):
         self._check(EXAMPLES)
+
+    def test_examples_verify_from_a_fresh_clone(self):
+        # No --policy, no runs/: step 1 finds the committed policy by hash.
+        pub = (EXAMPLES / "pubkey.txt").read_text().strip()
+        code, out, _ = _run_cli("verify", str(EXAMPLES / "clean/receipt.json"), "--pubkey", pub)
+        self.assertEqual(code, 0, out)
+        self.assertIn("policy/marta.policy.yaml", out)
+        code, out, _ = _run_cli("verify", str(EXAMPLES / "a3/receipt.json"), "--pubkey", pub)
+        self.assertEqual(code, 1, out)
+        self.assertIn("[1/4] \u2713", out)
+        self.assertIn("[3/4] \u2713", out)
+        self.assertIn("[4/4] \u2717 executed", out)
+        self.assertIn("Carrera 80 # 7-15", out)
+        self.assertIn("Evidence mismatch at step 4", out)
+
+    def test_examples_name_the_delivery_crops(self):
+        from .receipt import CROP_NAMES
+        for n in ("clean", "a3"):
+            names = sorted(p.name for p in (EXAMPLES / n).glob("*.png"))
+            self.assertEqual(names, sorted("%s_%s.png" % (s, c) for s in ("approved", "executed")
+                                           for c in CROP_NAMES))
 
     def test_synthetic_examples_like_the_published_ones(self):
         self._check(synthetic_examples())

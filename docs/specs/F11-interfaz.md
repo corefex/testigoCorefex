@@ -171,7 +171,8 @@ Las cifras de la portada y de `#/results` salen de `GET /api/bench` (`runs/bench
 
 - `POST /api/run {scenario, variant?, supervised, explain?, headed?}` lanza `python -m agent.run` como subproceso con una lista argv (nunca shell): `--scenario --variant --approve-in interface`, más `--no-supervisor --explain` sin supervisor y `--headed` si se pide. `INTERCEPTOR_PORT` del hijo = el puerto del servicio. Validación estricta: escenario en `clean|a1|a2|a3`, variante entero 1–5, booleanos de verdad, sin campos extra, `explain` solo sin supervisor. Una corrida a la vez (409).
 - `GET /api/run`: `idle | running | finished | failed | cancelled`, código de salida y las últimas 40 líneas impresas (en memoria, sin archivos).
-- `POST /api/run/cancel`: termina el proceso (y lo mata a los 5 s).
+- `POST /api/run/cancel`: termina el grupo de procesos (y lo mata a los 5 s) y niega la aprobación abierta («run cancelled»). La corrida va en su propia sesión; al apagarse el servicio se detiene. Mientras vive, `RUNS_DIR/ui-run.pid.json` guarda su pid: un servicio reiniciado la reporta como `orphaned`, rechaza otra (409) y la puede detener.
+- Las líneas impresas se guardan con las claves tapadas (valores de variables *KEY/TOKEN/SECRET*, `Bearer …`, `sk-…`, hex/base64 largos). El hijo recibe solo las variables de configuración y las básicas del sistema.
 - Mismas protecciones que las demás escrituras: Host local, Origin propio, JSON, solo loopback.
 
 **Buenas prácticas aplicadas:** botones y enlaces reales, etiquetas en cada control, foco visible, foco al título al cambiar de paso, `aria-live` con el estado de la corrida, contraste ≥ 4.5:1 (`--faint` pasó a `#6B6A66`), sin scroll horizontal a 375 px, estados de carga, vacío y error en cada paso, y la nota «simulation only» en el pie y en el paso 2. La jerga (SAM, hashes, `cannot_verify`, F8) solo aparece dentro de los desplegables y en el presentador.

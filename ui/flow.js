@@ -83,10 +83,9 @@ async function loadForRoute() {
   const r = S.route;
   try {
     if (r.name === "present") return loadFor(S.view);
-    if (r.name === "landing" || r.name === "results") {
-      if (!S.bench) { S.bench = await getJSON("/api/bench"); draw(); }
-      return;
-    }
+    if (r.name === "landing" && !S.benchComplete) { S.benchComplete = await getJSON("/api/bench?complete=1"); draw(); }
+    if (r.name === "results" && !S.bench) { S.bench = await getJSON("/api/bench"); draw(); }
+    if (r.name === "landing" || r.name === "results") return;
     if (r.name === "demo") {
       if (!S.policy || r.step === "rules") await loadPolicy();
       if (r.step === "result") {
@@ -111,7 +110,8 @@ function curRun() {
   const r = S.runs[S.current];
   return r && r.mode ? r : null;
 }
-function procFor(r) { return S.proc && r && S.proc.mode === r.mode && S.proc.state !== "idle" ? S.proc : null; }
+function procFor(r) { return S.proc && r && S.proc.mode === r.mode && S.proc.state !== "idle" && S.proc.state !== "orphaned" ? S.proc : null; }
+function procRunning() { return !!S.proc && (S.proc.state === "running" || S.proc.state === "orphaned"); }
 function procEnded() { return !!S.proc && ["finished", "failed", "cancelled"].includes(S.proc.state); }
 function lastStep(r, f) { for (let i = r.log.length - 1; i >= 0; i--) if (r.log[i].type === "agent.step" && f(r.log[i].label || "")) return r.log[i]; return null; }
 
@@ -178,7 +178,11 @@ function outcome(r) {
         text: p.state === "cancelled" ? "Nothing more will happen in this run." : "The agent did not finish. The last lines it printed are in the details." };
   return { kind: "running", cls: "info", icon: ICON.eye, title: "The agent is working", text: "" };
 }
-function needsYou(r) { return !!r && r.mode === "supervised" && !!r.approval && !r.granted; }
+function needsYou(r) {
+  if (!r || r.mode !== "supervised" || !r.approval || r.granted) return false;
+  const p = procFor(r);
+  return !(p && p.state !== "running");      // a stopped run waits for nobody
+}
 
 // one line of the Watching timeline, in plain words; null to leave it out
 function plainLine(e, r) {
@@ -277,7 +281,7 @@ setInterval(async () => {
 // -- small pieces -----------------------------------------------------------------
 const LOGO = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>`;
 function more(id, summary, body) {
-  return `<details class="more" id="${id}"${S.open[id] ? " open" : ""}><summary>${summary}</summary><div class="more-body">${body}</div></details>`;
+  return `<details class="more" id="${id}"${S.open[id] ? " open" : ""}><summary id="${id}-s">${summary}</summary><div class="more-body">${body}</div></details>`;
 }
 function askBefore(v) {
   return v === "new_address" ? "Ask you before delivering to a new address" : "Ask you before: " + String(v || "").replace(/_/g, " ");
@@ -290,8 +294,7 @@ function shortDate(iso) {
 const secs = ms => Number.isFinite(ms) ? Math.round(ms / 1000) + " s" : "—";
 
 // The headline numbers of WitnessBench, from the file only.
-function benchFacts() {
-  const b = S.bench;
+function benchFacts(b) {
   const s = b && b.available && b.data && b.data.summary;
   const counted = x => x && Number.isFinite(x.succeeded) && Number.isFinite(x.runs);
   if (!s || !counted(s.attacks_succeed_without) || !counted(s.attacks_succeed_with)) return null;
@@ -304,12 +307,13 @@ function benchFacts() {
     fp, fpUnread: Array.isArray(fp.statuses) && fp.statuses.length > 0 && fp.statuses.every(x => x === "cannot_verify"),
     perCheck: (s.per_check_latency_ms || {}).median, perRun: (s.added_latency_ms || {}).median,
     date: shortDate(b.data.generated), source: b.source || "", rows, summary: s,
+    incomplete: b.data.complete === false, missing: Array.isArray(b.data.missing) ? b.data.missing.length : null,
   };
 }
-function benchCards(f, cls) {
+function benchCards(f, cls, loaded) {
   if (!f) {
-    const msg = !S.bench ? "Loading the results…" : "No WitnessBench results yet. They are read from the benchmark file, never typed in.";
-    return `<p class="${cls}-note" role="status">${esc(msg)}</p>`;
+    const msg = !loaded ? "Loading the results…" : "No WitnessBench results yet. They are read from the benchmark file, never typed in.";
+    return `<p class="${cls}-note">${esc(msg)}</p>`;
   }
   const card = (big, text) => `<div class="${cls}-card"><span class="big">${big}</span><span>${text}</span></div>`;
   const cards = [];
@@ -333,13 +337,13 @@ function siteHeader() {
   const r = S.route;
   const cur = k => (k === "results" && r.name === "results") || (k === "demo" && r.name === "demo") ? ' aria-current="page"' : "";
   return `<header class="site-head"><nav class="site-nav" aria-label="Main">
-      <a class="site-brand" href="#/">${LOGO}<span>TESTIGO<span class="plus">+</span></span></a>
+      <a class="site-brand" id="nav-home" href="#/">${LOGO}<span>TESTIGO<span class="plus">+</span></span></a>
       <div class="site-links">
-        <a href="#/how">How it works</a>
-        <a href="#/attacks">Attacks</a>
-        <a href="#/results"${cur("results")}>Results</a>
+        <a id="nav-how" href="#/how">How it works</a>
+        <a id="nav-attacks" href="#/attacks">Attacks</a>
+        <a id="nav-results" href="#/results"${cur("results")}>Results</a>
       </div>
-      ${r.name === "demo" ? "" : `<a class="btn-primary" href="#/demo/rules">Try the demo</a>`}
+      ${r.name === "demo" ? "" : `<a class="btn-primary" id="nav-try" href="#/demo/rules">Try the demo</a>`}
     </nav></header>`;
 }
 function testBanner() {
@@ -364,8 +368,8 @@ const page = {
     <h1 id="hero-h">Your agent can be tricked. The screen can’t lie.</h1>
     <p class="hero-lede">A web page can hide an order for your AI agent: “deliver this somewhere else.” TESTIGO+ sits between the agent and the browser, reads the screen in pixels like a person would, and stops the order unless it matches the rules you said out loud.</p>
     <div class="cta-row">
-      <a class="btn-primary lg" href="#/demo/rules">Try the demo</a>
-      <a class="btn-secondary lg" href="#/how">See how it works</a>
+      <a class="btn-primary lg" id="hero-try" href="#/demo/rules">Try the demo</a>
+      <a class="btn-secondary lg" id="hero-how" href="#/how">See how it works</a>
     </div>
     <p class="fine-print">Runs on Meta’s Muse Wonder, SAM 3.1, Muse Spark and Muse Voice. Simulated shop and supplier.</p>
   </div>
@@ -411,8 +415,8 @@ const page = {
   <div class="wrap-w stack-m">
     <h2 id="res-h">WitnessBench, with real models</h2>
     ${landingBenchIntro()}
-    ${benchCards(benchFacts(), "dark")}
-    <p><a class="on-dark" href="#/results">See every result</a></p>
+    ${benchCards(benchFacts(S.benchComplete), "dark", !!S.benchComplete)}
+    <p><a class="on-dark" id="l-results" href="#/results">See every result</a></p>
   </div>
 </section>
 
@@ -421,12 +425,12 @@ const page = {
     <h2 id="start-h">See it stop an attack</h2>
     <p>Record your rules, pick an attack, and watch the agent run with and without TESTIGO+. About two minutes.</p>
   </div>
-  <a class="btn-primary xl" href="#/demo/rules">Start the demo</a>
+  <a class="btn-primary xl" id="start-demo" href="#/demo/rules">Start the demo</a>
 </section>`;
   },
 
   results() {
-    const f = benchFacts();
+    const f = benchFacts(S.bench);
     let table = "";
     if (f) {
       const rows = f.rows;
@@ -443,7 +447,7 @@ const page = {
       };
       const body = SITUATIONS.map(x => ["no_supervisor", "supervised"].map((mode, i) =>
         `<tr>${i === 0 ? `<th scope="row" rowspan="2">${esc(x.name)}</th>` : ""}<td>${mode === "supervised" ? "With TESTIGO+" : "Without"}</td>${line(x.key, mode)}</tr>`).join("")).join("");
-      table = rows.length ? `<div class="table-wrap" role="region" aria-label="Results per situation" tabindex="0"><table class="rtable">
+      table = rows.length ? `<div class="table-wrap" id="rtable-wrap" role="region" aria-label="Results per situation" tabindex="0"><table class="rtable">
           <caption>Each situation ran ${esc(n("a1", "supervised") || 5)} times with and without TESTIGO+.</caption>
           <thead><tr><th scope="col">Situation</th><th scope="col">Run</th><th scope="col">Reached the attacker</th><th scope="col">Stopped by TESTIGO+</th><th scope="col">Agent stopped on its own</th><th scope="col">Delivered to the shop</th></tr></thead>
           <tbody>${body}</tbody></table></div>` : "";
@@ -456,13 +460,15 @@ const page = {
         <p>TESTIGO+ adds a median of ${esc(secs(f.perRun))} per run and ${esc(secs(f.perCheck))} per screen check (p90 ${esc(secs((s.per_check_latency_ms || {}).p90))}).</p>
         ${edges}
         ${Number(s.errors) > 0 ? `<p>${esc(s.errors)} runs failed and are left out.</p>` : ""}
-        <p>The full view with bars is in the <a href="#/present/8">presenter</a>.</p>`) : "";
+        <p>The full view with bars is in the <a id="res-present" href="#/present/8">presenter</a>.</p>`) : "";
     return `<div class="wrap-n page">
       <h1>WitnessBench results</h1>
       <p class="lede">${f ? `${esc(f.wo.runs)} attacks and ${esc(f.fp.clean_runs ?? "—")} clean orders, each run with and without TESTIGO+, with Meta’s real models${f.date ? ` on ${esc(f.date)}` : ""}. Counts, not percentages.` : "The benchmark runs every attack with and without TESTIGO+ using Meta’s real models."}</p>
-      ${benchCards(f, "light")}
+      ${f && f.incomplete ? `<div class="callout warn">${ICON.warn}<div><b>This benchmark run is incomplete.</b>
+        <p>${f.missing != null ? `${esc(f.missing)} configurations are missing. ` : ""}These numbers come from an unfinished local run (<span class="mono">${esc(f.source)}</span>); the landing shows the last complete results.</p></div></div>` : ""}
+      ${benchCards(f, "light", !!S.bench)}
       ${table}${details}
-      <p class="next-row"><a class="btn-primary" href="#/demo/rules">Try the demo</a></p>
+      <p class="next-row"><a class="btn-primary" id="results-try" href="#/demo/rules">Try the demo</a></p>
     </div>`;
   },
 
@@ -472,7 +478,7 @@ const page = {
   },
 };
 function landingBenchIntro() {
-  const f = benchFacts();
+  const f = benchFacts(S.benchComplete);
   if (!f) return `<p>Every attack, run with and without TESTIGO+, with Meta’s real models. Counts, not percentages.</p>`;
   return `<p>${esc(f.wo.runs)} attacks and ${esc(f.fp.clean_runs ?? "—")} clean orders, each run with and without TESTIGO+, with Meta’s real models${f.date ? ` on ${esc(f.date)}` : ""}. Counts, not percentages.</p>`;
 }
@@ -487,7 +493,7 @@ function stepper(step) {
     const inner = `<span class="n" aria-hidden="true">${i < at ? "✓" : i + 1}</span><span class="t">${esc(x.name)}</span>`;
     const label = `<span class="sr-only">Step ${i + 1} of ${STEPS.length}${i < at ? ", done" : ""}: </span>`;
     return `<li class="${state}">${reach[x.key] || i === at
-      ? `<a href="#/demo/${x.key}"${i === at ? ' aria-current="step"' : ""}>${label}${inner}</a>`
+      ? `<a id="step-${x.key}" href="#/demo/${x.key}"${i === at ? ' aria-current="step"' : ""}>${label}${inner}</a>`
       : `<span class="off-step">${label}${inner}</span>`}</li>`;
   }).join("")}</ol></nav>`;
 }
@@ -497,11 +503,11 @@ const steps = {
     const p = S.policy;
     const head = `<h1>Your rules</h1>
       <p class="lede">The agent may only place orders that follow these rules. They are signed, so the agent cannot change them.</p>`;
-    if (!p && S.policyError) return head + `<div class="callout bad" role="alert">${ICON.stop}<div><b>Your rules could not be trusted.</b>
+    if (!p && S.policyError) return head + `<div class="callout bad">${ICON.stop}<div><b>Your rules could not be trusted.</b>
         <p>${esc(S.policyError)}</p><p>Record new rules to continue.</p></div></div>
         <div class="actions"><button class="btn-primary" id="showmandate" type="button">${ICON.mic} Record new rules</button></div>
         ${S.showMandate ? mandateLive({ transcript: "", deliver_only: [], max_per_order_cop: null, ask_before: "", short_sha: "" }) : ""}`;
-    if (!p) return head + `<div class="loading" role="status">Loading your rules…</div>`;
+    if (!p) return head + `<div class="loading">Loading your rules…</div>`;
     const ok = p.hash_ok && p.signed && p.signature_valid !== false;
     const sig = p.signature_valid === true ? "Signature valid" : p.signature_valid === false ? "Signature NOT valid"
       : "Signature present (the owner key is not on this machine to check it)";
@@ -529,19 +535,21 @@ const steps = {
 
   run() {
     const p = S.pick;
-    const busyRun = S.proc && S.proc.state === "running";
+    const busyRun = procRunning();
     const cards = SITUATIONS.map(x => `<label class="pick${p.scenario === x.key ? " on" : ""}">
-        <input type="radio" name="situation" value="${x.key}"${p.scenario === x.key ? " checked" : ""}>
+        <input type="radio" name="situation" id="sit-${x.key}" value="${x.key}"${p.scenario === x.key ? " checked" : ""}>
         <span class="pt">${esc(x.name)}</span><span class="pd">${esc(x.text)}</span></label>`).join("");
-    const err = S.runReq.error ? `<div class="callout ${S.runReq.busyRun ? "warn" : "bad"}" role="alert">${S.runReq.busyRun ? ICON.pause : ICON.warn}<div>
+    const err = S.runReq.error ? `<div class="callout ${S.runReq.busyRun ? "warn" : "bad"}">${S.runReq.busyRun ? ICON.pause : ICON.warn}<div>
         <b>${S.runReq.busyRun ? "Another run is already in progress." : "The run could not start."}</b>
         <p>${S.runReq.busyRun ? "Only one run at a time. Watch it, or stop it first." : esc(S.runReq.error)}</p>
-        ${S.runReq.busyRun ? `<p><a href="#/demo/watch">Watch the current run</a></p>` : ""}</div></div>` : "";
-    const inProgress = busyRun && !S.runReq.error ? `<div class="callout info" role="status">${ICON.eye}<div><b>A run is in progress.</b>
-        <p><a href="#/demo/watch">Watch it</a> or wait until it ends to start another.</p></div></div>` : "";
+        ${S.runReq.busyRun ? `<p><a id="watch-current" href="#/demo/watch">Watch the current run</a></p>` : ""}</div></div>` : "";
+    const orphan = S.proc && S.proc.state === "orphaned" ? `<div class="callout warn">${ICON.warn}<div><b>A run from before the service restarted is still going.</b>
+        <p>Stop it before starting another.</p><div class="actions tight"><button class="btn-secondary" id="cancelorphan" type="button">Stop that run</button></div></div></div>` : "";
+    const inProgress = busyRun && !S.runReq.error ? `<div class="callout info">${ICON.eye}<div><b>A run is in progress.</b>
+        <p><a id="watch-it" href="#/demo/watch">Watch it</a> or wait until it ends to start another.</p></div></div>` : "";
     return `<h1>Run the agent</h1>
       <p class="lede">Pick a situation. The agent will try to restock Doña Marta’s shop on the supplier’s page.</p>
-      ${inProgress}
+      ${orphan}${inProgress}
       <form id="runform" class="runform" novalidate>
         <fieldset class="picks"><legend>Situation</legend>${cards}</fieldset>
         <div class="switchrow">
@@ -557,7 +565,7 @@ const steps = {
         ${err}
         <div class="actions">
           <button class="btn-primary" type="submit" id="runbtn"${S.runReq.busy || busyRun ? " disabled" : ""}>${S.runReq.busy ? "Starting…" : "Run the agent"}</button>
-          <a class="btn-link" href="#/demo/rules">Back to your rules</a>
+          <a class="btn-link" id="backrules" href="#/demo/rules">Back to your rules</a>
         </div>
         <p class="muted small">This runs the real agent with Meta’s models: it takes a minute or two and uses API credit. Simulation only: the shop, the supplier and the addresses are not real.</p>
       </form>`;
@@ -571,13 +579,13 @@ const steps = {
         return `<h1>Watching</h1>${runFailed(p)}`;
       }
       return `<h1>Watching</h1>
-        <div class="status-line info" role="status">${ICON.eye}<span>Starting the agent and opening the supplier’s page…</span></div>
+        <div class="status-line info">${ICON.eye}<span>Starting the agent and opening the supplier’s page…</span></div>
         <div class="loading">This usually takes a few seconds.</div>
         <div class="actions"><button class="btn-secondary" id="cancelrun" type="button">Stop the run</button></div>`;
     }
     if (!r) return `<h1>Watching</h1>
       <div class="empty-state"><b>No run yet.</b><p>Choose a situation and start the agent to watch it here.</p>
-        <a class="btn-primary" href="#/demo/run">Choose a situation</a></div>`;
+        <a class="btn-primary" id="choose-run" href="#/demo/run">Choose a situation</a></div>`;
     const o = outcome(r);
     const sup = r.mode === "supervised";
     const you = needsYou(r);
@@ -611,13 +619,13 @@ const steps = {
   result() {
     const r = curRun();
     if (!r) return `<h1>Result</h1>${S.waitingFor && S.proc && S.proc.state !== "running" ? runFailed(S.proc)
-      : `<div class="empty-state"><b>No result yet.</b><p>Run the agent first; its result appears here.</p><a class="btn-primary" href="#/demo/run">Choose a situation</a></div>`}`;
+      : `<div class="empty-state"><b>No result yet.</b><p>Run the agent first; its result appears here.</p><a class="btn-primary" id="choose-run" href="#/demo/run">Choose a situation</a></div>`}`;
     const o = outcome(r);
     const sup = r.mode === "supervised";
     if (o.kind === "running") return `<h1>Result</h1>
-      <div class="empty-state"><b>The run is not over yet.</b><p>Watch it until it ends.</p><a class="btn-primary" href="#/demo/watch">Back to watching</a></div>`;
+      <div class="empty-state"><b>The run is not over yet.</b><p>Watch it until it ends.</p><a class="btn-primary" id="back-watch" href="#/demo/watch">Back to watching</a></div>`;
     const other = S.runs[sup ? "no_supervisor" : "supervised"];
-    const oo = other && other.mode && other.scenario === r.scenario ? outcome(other) : null;
+    const oo = other && other.mode && other.scenario === r.scenario && (other.variant || 1) === (r.variant || 1) ? outcome(other) : null;
     const compare = oo && oo.kind !== "running" ? `<div class="compare">
         <span class="muted">${sup ? "Without TESTIGO+" : "With TESTIGO+"}, same situation:</span>
         <span class="chip ${oo.cls}">${oo.icon}${esc(oo.title)}</span></div>` : "";
@@ -629,18 +637,18 @@ const steps = {
         <p class="muted">The screen as the agent saw it, with the regions the pixel reader found. Left, text only in the page code; right, text only on screen.</p>${divergeBody(r)}`));
     if (sup && verifyOutcome(r).event) ev.push(more("res-after", "What you approved vs. what happened", afterBody(r)));
     if (!sup && r.explain) ev.push(more("res-explain", "Where the attack was", explainPanel(r)));
-    if (!sup && !r.explain && proc && proc.state === "running") ev.push(`<p class="muted" role="status">Looking for where the attack was…</p>`);
+    if (!sup && !r.explain && proc && proc.state === "running") ev.push(`<p class="muted">Looking for where the attack was…</p>`);
     ev.push(more("res-steps", "Every step, in detail", timeline(r)));
     const again = sup ? "Compare without TESTIGO+" : "Run it with TESTIGO+";
-    const busy = S.proc && S.proc.state === "running";
+    const busy = procRunning();
     return `<h1>Result</h1>
       <p class="lede">${esc(situation(r.scenario).name)} · ${sup ? "protected by TESTIGO+" : "without TESTIGO+"}</p>
-      <div class="outcome-card ${o.cls}" role="status">${o.icon}<div><p class="ot">${esc(o.title)}</p><p class="os">${esc(o.text)}</p></div></div>
+      <div class="outcome-card ${o.cls}">${o.icon}<div><p class="ot">${esc(o.title)}</p><p class="os">${esc(o.text)}</p></div></div>
       ${compare}
       ${sup ? receiptCard(r) : ""}
-      ${S.runReq.error ? `<div class="callout bad" role="alert">${ICON.warn}<div><b>The run could not start.</b><p>${esc(S.runReq.error)}</p></div></div>` : ""}
+      ${S.runReq.error ? `<div class="callout bad">${ICON.warn}<div><b>The run could not start.</b><p>${esc(S.runReq.error)}</p></div></div>` : ""}
       <div class="actions">
-        <a class="btn-primary" href="#/demo/run">Run another</a>
+        <a class="btn-primary" id="runanother" href="#/demo/run">Run another</a>
         <button class="btn-secondary" id="compare" type="button"${busy || S.runReq.busy ? " disabled" : ""}>${again}</button>
       </div>
       <h2 class="sub">The evidence</h2>
@@ -652,10 +660,10 @@ function runFailed(p) {
   const why = p.state === "cancelled" ? "You stopped the run before it reported anything."
     : p.state === "finished" ? "The run ended, but none of its steps reached this page."
     : "The agent could not start. Check that the Meta API key is set in .env and that the supplier portal is running (make run).";
-  return `<div class="callout ${p.state === "cancelled" ? "info" : "bad"}" role="alert">${ICON.warn}<div>
+  return `<div class="callout ${p.state === "cancelled" ? "info" : "bad"}">${ICON.warn}<div>
       <b>${p.state === "cancelled" ? "Run stopped" : "The run did not work"}</b><p>${esc(why)}</p></div></div>
     ${p.tail && p.tail.length ? more("fail-log", "Last lines the run printed", `<pre class="tail">${esc(p.tail.join("\n"))}</pre>`) : ""}
-    <div class="actions"><a class="btn-primary" href="#/demo/run">Back to Run the agent</a></div>`;
+    <div class="actions"><a class="btn-primary" id="back-run" href="#/demo/run">Back to Run the agent</a></div>`;
 }
 
 function receiptCard(r) {
@@ -665,12 +673,12 @@ function receiptCard(r) {
       <p class="pad muted">A receipt was built but not signed on this machine (the owner key is missing), so there is nothing to verify.</p></div>`;
   const rc = S.receipt, vo = S.verify;
   let body;
-  if (!rc) body = `<p class="pad muted" role="status">Loading the receipt…</p>`;
+  if (!rc) body = `<p class="pad muted">Loading the receipt…</p>`;
   else if (rc.error) body = `<p class="pad">The receipt file could not be read: ${esc(rc.error)}</p>`;
   else {
     const d = rc.receipt;
-    const res = S.verifying ? `<p class="verify-res" role="status">Checking the signature and the evidence…</p>`
-      : vo ? `<p class="verify-res ${vo.exit_code === 0 ? "ok" : "bad"}" role="status">${vo.exit_code === 0 ? ICON.check : ICON.stop}<span>${vo.exit_code === 0
+    const res = S.verifying ? `<p class="verify-res">Checking the signature and the evidence…</p>`
+      : vo ? `<p class="verify-res ${vo.exit_code === 0 ? "ok" : "bad"}">${vo.exit_code === 0 ? ICON.check : ICON.stop}<span>${vo.exit_code === 0
           ? "Valid: the signature and the evidence match." : "Not valid: the receipt or its evidence does not check out."}</span></p>
           ${more("verify-out", "Command output", `<pre class="tail"><span class="mono">$ testigo verify runs/${esc(rc.path)}</span>\n${esc(vo.output)}</pre>`)}` : "";
     body = `<div class="pad">
@@ -685,8 +693,19 @@ function receiptCard(r) {
 }
 
 // -- the live status for screen readers -------------------------------------------
+function alertMessage() {
+  if (S.route.name !== "demo") return "";
+  const st = S.route.step;
+  if (st === "rules" && !S.policy && S.policyError) return "Your rules could not be trusted: " + S.policyError;
+  if ((st === "run" || st === "result") && S.runReq.error) return (S.runReq.busyRun ? "Another run is already in progress." : "The run could not start: " + S.runReq.error);
+  if (S.waitingFor && S.proc && !["running", "orphaned"].includes(S.proc.state)) return "The run did not work.";
+  return "";
+}
 function liveMessage() {
   if (S.route.name !== "demo") return "";
+  if (S.route.step === "result" && (S.verifying || S.verify)) {
+    return S.verifying ? "Checking the receipt." : S.verify.exit_code === 0 ? "Receipt valid: the signature and the evidence match." : "Receipt not valid.";
+  }
   if (S.waitingFor) return S.proc && S.proc.state !== "running" ? "The run did not start." : "Starting the agent.";
   const r = curRun();
   if (!r) return "";
@@ -694,19 +713,24 @@ function liveMessage() {
   const o = outcome(r);
   return o.kind === "running" ? "The agent is working." : o.title + ".";
 }
+// The live regions live outside #app and are never re-created: their text
+// changes only when the message does, so nothing is announced twice.
 function announce() {
-  const msg = liveMessage();
-  if (msg === S.lastAnnounce) return;
-  S.lastAnnounce = msg;
-  const el = document.getElementById("announce");
-  if (el) el.textContent = msg;
+  const set = (id, key, msg) => {
+    if (msg === S[key]) return;
+    S[key] = msg;
+    const el = document.getElementById(id);
+    if (el) el.textContent = msg;
+  };
+  set("announce", "lastAnnounce", liveMessage());
+  set("alertmsg", "lastAlert", alertMessage());
 }
 
 // -- drawing ----------------------------------------------------------------------
 function presentShell() {
   return `<div class="present">
     <header class="topbar" id="topbar">
-      <a class="brand" href="#/" title="Leave the presenter"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="currentColor"/><circle cx="12" cy="11" r="3.2" fill="#fff"/><circle cx="12" cy="11" r="1.4" fill="currentColor"/></svg>
+      <a class="brand" id="pnav-home" href="#/" title="Leave the presenter"><svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="currentColor"/><circle cx="12" cy="11" r="3.2" fill="#fff"/><circle cx="12" cy="11" r="1.4" fill="currentColor"/></svg>
         <span class="wordmark">TESTIGO<b>+</b></span></a>
       <div class="runinfo" id="runinfo"></div>
       <div class="agentstate" id="agentstate"></div>
@@ -732,7 +756,7 @@ function drawPresent() {
   document.getElementById("runinfo").textContent = r.mode ? `${r.scenario || ""}${r.variant ? " v" + r.variant : ""}` : "";
   document.getElementById("agentstate").innerHTML = chip(st.cls, st.icon, st.text);
   document.getElementById("nav").innerHTML = VIEWS.map((v, i) =>
-    `<a href="#/present/${i}" ${i === S.view ? 'aria-current="page"' : ""}><span class="n">${i || "·"}</span>${esc(v.name)}${hasNews(i) && i !== S.view ? '<span class="dot"></span>' : ""}</a>`).join("");
+    `<a id="pnav-${i}" href="#/present/${i}" ${i === S.view ? 'aria-current="page"' : ""}><span class="n">${i || "·"}</span>${esc(v.name)}${hasNews(i) && i !== S.view ? '<span class="dot"></span>' : ""}</a>`).join("");
   const auto = document.getElementById("auto");
   auto.textContent = S.auto ? "Follow: on" : "Follow: off";
   auto.setAttribute("aria-pressed", String(S.auto));
@@ -780,7 +804,7 @@ function bind() {
   on("msign", signMandate); on("mdiscard", discardMandate);
   on("auto", () => { S.auto = !S.auto; draw(); });
   on("showmandate", () => { S.showMandate = !S.showMandate; draw(); });
-  on("cancelrun", cancelRun);
+  on("cancelrun", cancelRun); on("cancelorphan", cancelRun);
   on("compare", () => {
     const r = curRun();
     if (r) startRun({ scenario: r.scenario, variant: r.variant || 1, supervised: r.mode !== "supervised" });

@@ -18,11 +18,13 @@ Routes
   GET  /api/receipt  the newest receipt.json under runs/, or ?path= (view 7)
   POST /api/verify   runs the real `testigo verify` on that receipt (view 7)
   GET  /api/bench    runs/bench_results.json, else the newest committed
-                     results/witnessbench-*.json, or "not available"
+                     results/witnessbench-*.json, or "not available";
+                     ?complete=1 skips a local run marked "complete": false
   POST /api/run      {scenario, variant?, supervised, explain?, headed?}: start one
                      real run (`agent.run` as a subprocess); 409 while one runs
-  GET  /api/run      the run started here: idle | running | finished | failed | cancelled
-  POST /api/run/cancel  stop that run
+  GET  /api/run      the run started here: idle | running | finished | failed |
+                     cancelled | orphaned (left by a service that restarted)
+  POST /api/run/cancel  stop that run (its process group) and deny its open approval
   GET  /runs/<path>  screenshots and crops (PNG/JPEG only) from runs/
 
 Approval (F7, view 5; see approval/desk.py)
@@ -51,15 +53,19 @@ after the transcription.
 import asyncio
 import base64
 import binascii
+import contextlib
 import html
 import io
 import json
 import os
+import re
 import secrets
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -86,7 +92,13 @@ MAX_VOICE_BYTES = 1_500_000        # base64 of ~20 s of 16 kHz mono 16-bit PCM
 MAX_VOICE_SECONDS = 20
 MIN_VOICE_SECONDS = 0.3
 
-app = FastAPI(title="TESTIGO+ interceptor", docs_url=None, redoc_url=None)
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    yield
+    runs.shutdown()          # never leave an agent running behind the service
+
+
+app = FastAPI(title="TESTIGO+ interceptor", docs_url=None, redoc_url=None, lifespan=lifespan)
 hub = EventHub()
 desk = ApprovalDesk()
 
@@ -617,21 +629,32 @@ def api_verify(request: Request, path: str = ""):
 RESULTS_DIR = config.ROOT / "results"
 
 
-def bench_file():
+def _committed_bench():
+    committed = sorted(Path(RESULTS_DIR).glob("witnessbench-*.json"))
+    return (committed[-1], "results/" + committed[-1].name) if committed else (None, None)
+
+
+def _incomplete(p):
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("complete") is False
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def bench_file(complete=False):
     """runs/bench_results.json (the latest WitnessBench run on this machine), else
-    the newest committed copy in results/, else None."""
+    the newest committed copy in results/, else None. complete=True skips a
+    local run marked "complete": false when a committed file exists."""
     p = runs_dir() / "bench_results.json"
     if p.is_file():
-        return p, "runs/bench_results.json"
-    committed = sorted(Path(RESULTS_DIR).glob("witnessbench-*.json"))
-    if committed:
-        return committed[-1], "results/" + committed[-1].name
-    return None, None
+        if not (complete and _incomplete(p) and _committed_bench()[0] is not None):
+            return p, "runs/bench_results.json"
+    return _committed_bench()
 
 
 @app.get("/api/bench")
-def api_bench():
-    p, label = bench_file()
+def api_bench(complete: bool = False):
+    p, label = bench_file(complete)
     if p is None:
         return {"available": False}
     try:
@@ -653,14 +676,108 @@ RUN_SCENARIOS = ("clean", "a1", "a2", "a3")
 RUN_KEYS = {"scenario", "variant", "supervised", "explain", "headed"}
 RUN_TAIL_LINES = 40
 RUN_STOP_TIMEOUT_S = 5
+RUN_PID_FILE = "ui-run.pid.json"       # under RUNS_DIR: a restarted service still sees the run
+# What the child needs besides the declared config variables (common/config.ENV_VARS).
+CHILD_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP", "LANG",
+             "LC_ALL", "LC_CTYPE", "TZ", "VIRTUAL_ENV", "PYTHONPATH", "PYTHONHOME",
+             "PLAYWRIGHT_BROWSERS_PATH", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
+             "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+             "http_proxy", "https_proxy", "no_proxy", "SYSTEMROOT")
 
 
 def start_process(argv, env):
-    """Start the run. Tests replace this function; they never start a real run."""
+    """Start the run in its own process group (so the whole group, browser
+    included, can be stopped). Tests replace this function; they never start
+    a real run."""
     return subprocess.Popen(argv, cwd=config.ROOT, env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, bufsize=1, errors="replace")
+                            text=True, bufsize=1, errors="replace", start_new_session=True)
 
+
+def child_env(port=None):
+    """Only what the run needs: the system basics and the config variables
+    (the Meta key among them; agent.run also reads .env itself)."""
+    config.load_env()
+    names = set(CHILD_ENV) | set(config.ENV_VARS)
+    env = {k: v for k, v in os.environ.items() if k in names or k.startswith("LC_")}
+    if port:
+        env["INTERCEPTOR_PORT"] = str(port)     # the child reports to this service
+    return env
+
+
+# -- secrets never reach the page through the printed lines --------------------
+_SECRET_PATTERNS = [
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"(?i)\b(api[_-]?key|token|secret|password|authorization)(\s*[=:]\s*)[\"']?[^\s\"',]{6,}"),
+    re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+    re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{40,}={0,2}"),
+]
+
+
+def _secret_values():
+    out = []
+    for k, v in os.environ.items():
+        if v and len(v) >= 6 and re.search(r"KEY|TOKEN|SECRET|PASSWORD", k, re.I) and "PATH" not in k:
+            out.append(v)
+    return sorted(set(out), key=len, reverse=True)
+
+
+def redact(line):
+    for v in _secret_values():
+        line = line.replace(v, "[redacted]")
+    for i, rx in enumerate(_SECRET_PATTERNS):
+        line = rx.sub((lambda m: m.group(1) + m.group(2) + "[redacted]") if i == 2 else "[redacted]", line)
+    return line
+
+
+# -- stopping a run, its process group, and the pending approval ---------------
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def run_leader_alive(pid):
+    """That pid is alive and still leads its own process group, as our run did
+    (start_new_session): a reused pid of some other program is not ours."""
+    if not pid_alive(pid):
+        return False
+    try:
+        return os.getpgid(pid) == pid
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def kill_group(pid, sig):
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _signal(proc, sig):
+    """The whole group of a real child; a test double through its own methods."""
+    if isinstance(proc, subprocess.Popen):
+        kill_group(proc.pid, sig)
+    elif sig == signal.SIGKILL:
+        proc.kill()
+    else:
+        proc.terminate()
+
+
+def deny_open_approval(reason):
+    """A run that stops cannot be waiting for the person any more."""
+    cur = desk.current()
+    if cur and cur.get("decision") is None:
+        try:
+            desk.decide(cur["id"], "deny", reason)
+        except DeskError:
+            pass
 
 def run_argv(scenario, variant, supervised, explain, headed):
     argv = [sys.executable, "-m", "agent.run", "--scenario", scenario,
@@ -704,17 +821,66 @@ def run_request(body):
 
 
 class RunManager:
+    """One run at a time, started from the page. Its pid (the process group
+    leader) is kept in RUNS_DIR/ui-run.pid.json while it lives, so a restarted
+    service reports it as orphaned, refuses a second run, and can stop it."""
+
     def __init__(self):
         self.lock = threading.Lock()
         self.proc = None
         self.info = None
         self.tail = deque(maxlen=RUN_TAIL_LINES)
 
+    # -- the pid file --------------------------------------------------------
+    def _pid_path(self):
+        return runs_dir() / RUN_PID_FILE
+
+    def _write_pid(self, proc, info):
+        pid = getattr(proc, "pid", None)
+        if not isinstance(pid, int):
+            return
+        path = self._pid_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(dict(info, pid=pid)), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _clear_pid(self, pid=None):
+        path = self._pid_path()
+        try:
+            if pid is not None and json.loads(path.read_text(encoding="utf-8")).get("pid") != pid:
+                return
+            path.unlink()
+        except (OSError, ValueError):
+            pass
+
+    def orphan(self):
+        """The run a previous service left alive, or None (a stale file is removed)."""
+        path = self._pid_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        pid = data.get("pid") if isinstance(data, dict) else None
+        if not isinstance(pid, int) or pid <= 0 or not run_leader_alive(pid):
+            self._clear_pid()
+            return None
+        return data
+
+    # -- state -----------------------------------------------------------------
     def busy(self):
         return self.proc is not None and self.proc.poll() is None
 
     def view(self):
         with self.lock:
+            if self.info is not None and (self.busy() or self.orphan() is None):
+                return dict(self.info, tail=list(self.tail))
+            o = self.orphan() if not self.busy() else None
+            if o is not None:
+                return dict({k: o.get(k) for k in ("scenario", "variant", "supervised", "mode", "started")},
+                            state="orphaned", pid=o["pid"], ended=None, exit_code=None, tail=[],
+                            note="started before the interface service restarted; stop it to run again")
             if self.info is None:
                 return {"state": "idle"}
             return dict(self.info, tail=list(self.tail))
@@ -723,18 +889,18 @@ class RunManager:
         with self.lock:
             if self.busy():
                 raise HTTPException(409, "a run is already in progress")
-            env = dict(os.environ)
-            if port:
-                env["INTERCEPTOR_PORT"] = str(port)     # the child reports to this service
+            if self.orphan() is not None:
+                raise HTTPException(409, "a run started before the service restarted is still going; stop it first")
             argv = run_argv(**req)
             self.tail.clear()
             try:
-                proc = start_process(argv, env)
+                proc = start_process(argv, child_env(port))
             except OSError as e:
                 raise HTTPException(500, "could not start the run: %s" % type(e).__name__)
             self.proc = proc
             self.info = dict(req, state="running", started=clock.iso(), ended=None,
                              exit_code=None, mode="supervised" if req["supervised"] else "no_supervisor")
+            self._write_pid(proc, self.info)
         threading.Thread(target=self._watch, args=(proc,), daemon=True).start()
         return self.view()
 
@@ -743,29 +909,72 @@ class RunManager:
             for line in proc.stdout or ():
                 with self.lock:
                     if self.proc is proc:
-                        self.tail.append(line.rstrip("\n")[:300])
+                        self.tail.append(redact(line.rstrip("\n"))[:300])
         except (OSError, ValueError):
             pass
         code = proc.wait()
         with self.lock:
-            if self.proc is proc and self.info["state"] == "running":
-                self.info.update(state="finished" if code == 0 else "failed",
-                                 exit_code=code, ended=clock.iso())
+            if self.proc is not proc:
+                return                                  # a newer run took over
+            if self.info["state"] == "running":
+                self.info.update(state="finished" if code == 0 else "failed", ended=clock.iso())
+            if self.info.get("exit_code") is None:
+                self.info["exit_code"] = code
+            self._clear_pid(getattr(proc, "pid", None))
 
     def cancel(self):
         with self.lock:
             proc = self.proc
             if proc is None or proc.poll() is not None:
-                return False
+                return self._cancel_orphan()
             self.info.update(state="cancelled", ended=clock.iso())
-        proc.terminate()
+        deny_open_approval("run cancelled")
+        self._stop(proc)
+        with self.lock:
+            if self.proc is proc:
+                self.info["exit_code"] = proc.returncode
+                self._clear_pid(getattr(proc, "pid", None))
+        return True
+
+    def _stop(self, proc):
+        _signal(proc, signal.SIGTERM)
         try:
             proc.wait(timeout=RUN_STOP_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            proc.kill()
-        with self.lock:
-            self.info["exit_code"] = proc.returncode
+            _signal(proc, signal.SIGKILL)
+            try:
+                proc.wait(timeout=RUN_STOP_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def _cancel_orphan(self):
+        o = self.orphan()
+        if o is None:
+            return False
+        pid = o["pid"]
+        deny_open_approval("run cancelled")
+        kill_group(pid, signal.SIGTERM)
+        deadline = time.monotonic() + RUN_STOP_TIMEOUT_S
+        while pid_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if pid_alive(pid):
+            kill_group(pid, signal.SIGKILL)
+        self._clear_pid(pid)
         return True
+
+    def shutdown(self):
+        """The service is stopping: never leave an agent running behind it."""
+        with self.lock:
+            proc = self.proc
+            if proc is None or proc.poll() is not None:
+                return
+            self.info.update(state="cancelled", ended=clock.iso())
+        deny_open_approval("the interface service stopped")
+        self._stop(proc)
+        with self.lock:
+            if self.proc is proc:
+                self.info["exit_code"] = proc.returncode
+                self._clear_pid(getattr(proc, "pid", None))
 
 
 runs = RunManager()

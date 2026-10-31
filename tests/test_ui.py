@@ -817,6 +817,89 @@ class FlowPageTests(ChromiumCase):
         self.page.wait_for_selector(".verify-res.ok", timeout=20000)
         self.assertIn("Valid: the signature and the evidence match", self.main())
 
+
+    # -- review fixes -------------------------------------------------------
+    def test_cancel_during_an_approval_closes_it_on_the_page(self):
+        self.open("#/demo/run", "#runform")
+        self.page.click("#runbtn")
+        self.page.wait_for_selector(".status-line")
+        a = self.approval()
+        self.events(ev.run_started("supervised", "clean"), a)
+        self.live.post("/api/approval/open", {"event": a})
+        self.page.wait_for_selector(".needs-you")
+        self.page.click("#cancelrun")
+        self.page.wait_for_function("() => !document.querySelector('.needs-you')")
+        self.assertIn("You stopped the run", self.main())
+        self.assertEqual(service.desk.current()["decision"], "deny")
+        self.assertNotIn("needs you", self.page.inner_text("#announce"))
+
+    def test_focus_survives_redraws(self):
+        self.open("#/demo/run", "#runform")
+        self.page.focus("#sit-a2")
+        self.page.keyboard.press("Space")                     # select it: a redraw
+        self.page.wait_for_selector("#sit-a2:checked")
+        self.events(ev.agent_step(1, "unrelated event"))     # a WebSocket redraw
+        self.page.wait_for_timeout(200)
+        self.assertEqual(self.page.evaluate("document.activeElement.id"), "sit-a2")
+        self.page.focus("#run-more-s")
+        self.page.keyboard.press("Enter")                     # open the disclosure
+        self.events(ev.agent_step(2, "another"))
+        self.page.wait_for_timeout(200)
+        self.assertEqual(self.page.evaluate("document.activeElement.id"), "run-more-s")
+        self.assertTrue(self.page.evaluate("document.getElementById('run-more').open"))
+        # every focusable element of every page has an id to come back to
+        for route in ("#/", "#/results", "#/demo/rules", "#/demo/run"):
+            self.open(route, "#main h1")
+            missing = self.page.evaluate("""() => [...document.querySelectorAll(
+                '#app a[href], #app button, #app input, #app select, #app summary, #app [tabindex]')]
+                .filter(e => !e.id).map(e => e.outerHTML.slice(0, 80))""")
+            self.assertEqual(missing, [], route)
+
+    def test_live_regions_are_persistent(self):
+        self.replay("a1", True)
+        self.open("#/demo/result", ".outcome-card")
+        self.assertEqual(self.page.locator("#app [role=alert], #app [role=status], #app [aria-live]").count(), 0)
+        self.page.wait_for_function("document.getElementById('announce').textContent.includes('Blocked')")
+        self.page.evaluate("window.__announce = document.getElementById('announce')")
+        self.events(ev.agent_step(9, "unrelated"))
+        self.page.wait_for_timeout(200)
+        self.assertIn("Blocked", self.page.inner_text("#announce"))
+        self.assertTrue(self.page.evaluate("window.__announce === document.getElementById('announce')"))
+        # an error goes to the persistent alert region, not a re-inserted card
+        service.runs.proc = type("Busy", (), {"poll": lambda self: None})()
+        self.addCleanup(setattr, service.runs, "proc", None)
+        self.page.click("#compare")
+        self.page.wait_for_function("document.getElementById('alertmsg').textContent.includes('already in progress')")
+        self.assertEqual(self.page.locator("#app [role=alert]").count(), 0)
+        self.errors[:] = [e for e in self.errors if "409" not in e]   # the expected refusal
+
+    def test_compare_needs_the_same_variant(self):
+        self.events(ev.run_started("no_supervisor", "a1", 2), ev.order_confirmed(4, "Kr 80 # 7-15", 120000),
+                    ev.run_started("supervised", "a1", 1))
+        from tests.fixtures.fake_agent import run_fixture
+        self.events(*[e for e in run_fixture("a1", supervised=True).events if e["type"] != "run.started"])
+        self.open("#/demo/result", ".outcome-card")
+        self.assertEqual(self.page.locator(".compare").count(), 0)
+        self.events(ev.run_started("no_supervisor", "a1", 1), ev.order_confirmed(4, "Kr 80 # 7-15", 120000))
+        self.open("#/demo/result", ".compare")                # now the unprotected v1 run is on screen
+        self.assertIn("With TESTIGO+, same situation", self.page.inner_text(".compare"))
+
+    def test_an_incomplete_local_bench_never_replaces_the_landing_numbers(self):
+        import json
+        summary = {"attacks_succeed_without": {"succeeded": 2, "runs": 3},
+                   "attacks_succeed_with": {"succeeded": 0, "runs": 3},
+                   "false_positives": {"count": 0, "clean_runs": 1}}
+        (self.tmp / "bench_results.json").write_text(json.dumps(
+            {"summary": summary, "rows": [], "complete": False, "missing": ["a2 v1", "a3 v2"]}))
+        self.open("#/", ".dark-card")
+        self.assertIn("9 of 10", self.main())                 # the committed, complete results
+        self.assertNotIn("2 of 3", self.main())
+        self.open("#/results", ".light-card")
+        t = self.main()
+        self.assertIn("This benchmark run is incomplete", t)
+        self.assertIn("2 configurations are missing", t)
+        self.assertIn("0 of 3", t)
+
     def test_presenter_still_reachable(self):
         self.open("#/present/0")
         self.page.wait_for_selector("#nav a")

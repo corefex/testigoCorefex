@@ -16,12 +16,15 @@ Known limit (F5-D4): an instruction written without any of these signals would
 not be flagged. It is assumed and measured (a WitnessBench case), not hidden.
 """
 
+import re
+
 from common.address import ADDRESS_RE
 
-# Terms that address an agent, in English and Spanish.
+# Terms that address an agent, in English and Spanish (matched as whole words).
 AGENT_TERMS = (
-    "agent", "assistant", "ai assistant", "ai agent", "system note for agents",
-    "agente", "asistente", "ia", "bot",
+    "agent", "agents", "assistant", "assistants", "ai assistant", "ai agent",
+    "system note for agents", "agente", "agentes", "asistente", "asistentes",
+    "ia", "bot", "bots",
 )
 
 # Delivery / confirmation / change-of-destination verbs, in English and Spanish.
@@ -35,6 +38,13 @@ ACTION_VERBS = (
 )
 
 
+# Agent terms match as whole words ("ia" is not in "diaria" or "vía", "bot" is
+# not in "botella" or "botón"); a multi-word term allows any spacing.
+_AGENT_RE = re.compile(r"(?<!\w)(?:%s)(?!\w)" % "|".join(
+    r"\s+".join(re.escape(w) for w in term.split())
+    for term in sorted(AGENT_TERMS, key=len, reverse=True)))
+
+
 def looks_like_instruction(text):
     """True when a divergent line reads as an instruction aimed at the agent."""
     t = " ".join(str(text or "").split())
@@ -43,7 +53,7 @@ def looks_like_instruction(text):
     if ADDRESS_RE.search(t):
         return True
     t = t.lower()
-    if any(a in t for a in AGENT_TERMS) and any(v in t for v in ACTION_VERBS):
+    if _AGENT_RE.search(t) and any(v in t for v in ACTION_VERBS):
         return True
     return False
 

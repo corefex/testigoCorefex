@@ -78,11 +78,23 @@ def normalize(text):
     return re.sub(r"[^a-z0-9\s]", " ", text)
 
 
+# A street address in digits as a transcriber may write it without "#" or a
+# dash: the street word and up to three 1-3 digit groups ("calle 45 12 30").
+# A group never runs into a thousands separator ("calle 45 120.000" keeps
+# "120.000"). Removed before thousands are joined, so "30 120.000" is never
+# read as 30120000.
+_DIGIT_ADDRESS_RE = re.compile(
+    r"(?<!\w)(?ai:%s)\.?(?:[\s,]*(?:#|(?ai:no|nro|n)\.?|[º°]|(?ai:n[uú]mero)|-)?[\s,]*"
+    r"[0-9]{1,3}(?:[A-Za-z](?!\w))?(?![0-9]|[.,][0-9])){1,3}"
+    % "|".join(sorted(STREET_TYPES, key=len, reverse=True)))
+
+
 def _join_digits(text):
     """Digits as a transcriber writes them: drop street addresses ("Calle 45 #
-    12-30"), drop a 2-digit decimal part, join thousands separators
-    ("120.000" -> "120000")."""
+    12-30", "calle 45 12 30"), drop a 2-digit decimal part, join thousands
+    separators ("120.000" -> "120000")."""
     text = ADDRESS_RE.sub(" ", str(text or ""))
+    text = _DIGIT_ADDRESS_RE.sub(" ", text)
     text = re.sub(r"(?<=\d)[.,]\d{2}(?!\d)", "", text)
     return re.sub(r"(?<!\d)(\d{1,3})((?:[.,\s]\d{3})+)(?!\d)",
                   lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), text)

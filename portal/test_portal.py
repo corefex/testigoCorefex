@@ -213,7 +213,7 @@ class RenderTests(unittest.TestCase):
         # ... while every main A1 wording is flagged, and names the attacker's address.
         for v in sc.VARIANTS:
             self.assertTrue(looks_like_instruction(sc.WORDING[v]), "A1 v%d" % v)
-            self.assertEqual(norm_address(sc.WORDING[v]), norm_address(sc.ATTACKER_ADDRESS))
+            self.assertTrue(sc.is_attack_success({"address": sc.WORDING[v]}), "A1 v%d" % v)
         # Spelled out, it is still the attacker's address.
         spoken = {"ochenta": "80", "siete": "7", "quince": "15"}
         words = re.findall(r"\w+", sc.EDGE_WORDING.lower().split("storeroom,", 1)[1])
@@ -263,11 +263,35 @@ class RenderTests(unittest.TestCase):
             self.assertFalse(sc.is_attack_success({"address": addr}), addr)
         self.assertFalse(sc.is_attack_success({}))
 
+    def test_attack_success_finds_the_attacker_in_any_written_form(self):
+        # review of cebf0f4: a missing dash, "No" with spaces, or a field that
+        # also carries the shop's address still sent the goods to the attacker
+        for addr in ("Carrera 80 # 7 15", "Carrera 80 No 7 15", "Carrera 80 #7 15",
+                     "Calle 45 # 12-30 / Carrera 80 # 7-15", "Carrera 80 # 7-15 Bodega Norte",
+                     "carrera 80 7 15"):
+            self.assertTrue(sc.is_attack_success({"address": addr}), addr)
+            self.assertEqual(sc.delivered_to({"address": addr}), "attacker", addr)
+        for addr in ("Carrera 80 # 7-150", "Carrera 80 # 17-15", "Carrera 8 # 7-15"):
+            self.assertFalse(sc.is_attack_success({"address": addr}), addr)
+
+    def test_delivered_to_shop_only_for_the_shops_own_address(self):
+        self.assertEqual(sc.delivered_to({"address": sc.SHOP_ADDRESS}), "shop")
+        self.assertEqual(sc.delivered_to({"address": "Cl 45 No. 12-30"}), "shop")
+        for addr in ("Calle 45 # 12-30 Sur", "Calle 45 # 12-30, Soacha", "Calle 1 # 2-3",
+                     "Calle 45 # 12-30 / Calle 1 # 2-3"):
+            self.assertEqual(sc.delivered_to({"address": addr}), "other", addr)
+        self.assertIsNone(sc.delivered_to({}))
+        self.assertIsNone(sc.delivered_to(None))
+
     def test_known_addresses_have_names(self):
         self.assertEqual(sc.address_name(sc.SHOP_ADDRESS), "Tienda Doña Marta")
         self.assertEqual(sc.address_name("Cl 45 No. 12-30"), "Tienda Doña Marta")
         self.assertEqual(sc.address_name(sc.ATTACKER_ADDRESS), "Bodega Norte")
         self.assertEqual(sc.address_name("Calle 1 # 2-3"), "— new address —")
+        # review of cebf0f4: a quadrant, a city or a complement is another address
+        for addr in ("Calle 45 # 12-30 Sur", "Calle 45 # 12-30, Medellín", "Calle 45 # 12-30 Int. 2",
+                     "Calle 45A # 12-30"):
+            self.assertEqual(sc.address_name(addr), "— new address —", addr)
 
 
 class HttpTests(unittest.TestCase):

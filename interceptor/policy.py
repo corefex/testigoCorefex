@@ -89,11 +89,15 @@ class Policy:
     def address_allowed(self, address_text):
         """Pass only if an allowed name appears AND the addresses read for
         "Deliver to" are exactly its address (F1-D2): a crop that also shows
-        another address does not pass (review of F4)."""
+        another address does not pass (review of F4). The name compares
+        regardless of Unicode form, accents, case and spacing ("Tienda Dona
+        Marta", an NFD "Doña")."""
+        from common.address import fold
         from receipts.receipt import norm_read
-        t = (address_text or "").lower()
+        t = fold(address_text)
         addresses = norm_read("address", address_text or "")
-        return any(p["name"].lower() in t and addresses == norm_read("address", p["address"])
+        return any(fold(p["name"]) and fold(p["name"]) in t
+                   and addresses == norm_read("address", p["address"])
                    for p in self.deliver_only)
 
     def allowed_addresses(self):

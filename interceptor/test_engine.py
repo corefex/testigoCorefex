@@ -201,6 +201,38 @@ class DecoyTests(unittest.TestCase):
         self.assertFalse(p.address_allowed(
             "Tienda Doña Marta Calle 45 # 12-30, Bogotá Carrera 80 # 7-15"))
 
+    def test_address_with_quadrant_city_or_complement_is_not_allowed(self):
+        # review of cebf0f4 (security): the parse ignored what follows "12-30"
+        from interceptor.policy import load
+        from common.config import POLICY_PATH
+        p = load(POLICY_PATH)
+        for tail in (" Sur", " Este", ", Medellín", ", Soacha", " Int. 2", ", Bogotá, Soacha"):
+            self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45 # 12-30" + tail), tail)
+        self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45 Sur # 12-30, Bogotá"))
+        self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45A # 12-30, Bogotá"))
+        self.assertTrue(p.address_allowed("Deliver to Calle 45 # 12-30, Bogotá D.C. Tienda Doña Marta"))
+
+    def test_allowed_name_compares_without_accents_or_unicode_form(self):
+        # review of cebf0f4: "Dona" and an NFD "Doña" were refused
+        import unicodedata
+        from interceptor.policy import load
+        from common.config import POLICY_PATH
+        p = load(POLICY_PATH)
+        for name in ("Tienda Dona Marta", unicodedata.normalize("NFD", "Tienda Doña Marta"),
+                     "TIENDA DOÑA MARTA", "Tienda  Doña\u00a0Marta"):
+            self.assertTrue(p.address_allowed(name + " · Calle 45 # 12-30, Bogotá"), name)
+        self.assertFalse(p.address_allowed("Tienda Marta · Calle 45 # 12-30, Bogotá"))
+
+    def test_stray_address_with_suffix_or_tail_blocks(self):
+        from interceptor.policy import load
+        from common.config import POLICY_PATH
+        from interceptor.engine import Interceptor
+        itc = Interceptor(load(POLICY_PATH), None)
+        self.assertEqual(itc._stray_addresses(["Nueva bodega: Carrera 80A # 7-15"]), ["carrera 80a # 7-15"])
+        self.assertEqual(itc._stray_addresses(["Entrega en Calle 45 # 12-30 Sur"]), ["calle 45 # 12-30 sur"])
+        self.assertEqual(itc._stray_addresses(["Calle 45 # 12-30, Bogotá", "Carrera 80 # 7 15"]),
+                         ["carrera 80 # 7-15"])
+
     def test_stray_address_on_screen_blocks(self):
         from interceptor.policy import load
         from common.config import POLICY_PATH

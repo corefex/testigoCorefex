@@ -144,9 +144,13 @@ function allowedAddresses() {
 // -- F8: compare by the values read from the pixels (receipts/receipt.py norm_read)
 // Real crops of unchanged content hash differently across captures, so view 6
 // never compares hashes when read values exist.
-// A Colombian street address in canonical form, as common/address.py does it:
-// street type (and its abbreviations), "#"/"No."/"N°"/"número", en/em dashes,
-// I/l/O misread for 1/1/0 in digit places -> "calle 45 # 12-30".
+// A Colombian street address in canonical form, as common/address.py does it
+// (keep the two in step; tests/test_ui.py checks they agree): street type (and
+// its abbreviations), letter/"bis" suffixes per number ("45A", "45 Bis"),
+// quadrant ("Sur", ...), "#"/"No."/"N°"/"número", en/em dashes (a space after
+// an explicit separator), I/l/O misread for 1/1/0 in digit places, ASCII digits
+// only; up to four words after it are part of it, except the city "Bogotá"/"D.C."
+// -> "calle 45 # 12-30", "calle 45a bis # 12-30 sur".
 const STREET_TYPES = {
   calle: "calle", cll: "calle", cl: "calle",
   carrera: "carrera", cra: "carrera", kra: "carrera", kr: "carrera", cr: "carrera",
@@ -154,19 +158,77 @@ const STREET_TYPES = {
   diagonal: "diagonal", diag: "diagonal", dg: "diagonal",
   transversal: "transversal", transv: "transversal", tv: "transversal", tr: "transversal",
 };
+const QUADRANTS = ["sur", "este", "norte", "oeste"];
+const COMPLEMENTS = new Set([...QUADRANTS, "bis", "int", "interior", "apto", "apartamento", "ap", "local",
+  "loc", "of", "oficina", "torre", "bloque", "bl", "casa", "piso", "lote", "manzana", "mz", "etapa"]);
+const CITY_WORDS = new Set(["bogota", "dc"]);
+const TAIL_MAX = 4;
 const ci = w => w.replace(/[a-z]/g, c => `[${c}${c.toUpperCase()}]`);
-const ADDR_STREET = Object.keys(STREET_TYPES).sort((a, b) => b.length - a.length).map(ci).join("|");
-const ADDR_NUM = "(?=[\\dIlO]{0,2}\\d)[\\dIlO]{1,3}";
-const ADDR_SEP = `(?:#|${ci("n")}[oO\u00ba\u00b0]\\.?|${ci("n")}\\.\\s?[oO\u00ba\u00b0]|${ci("nro")}\\.?|${ci("n")}[uUúÚ]${ci("mero")})`;
 const W = "[\\p{L}\\p{N}_]";
-const ADDRESS_RE = new RegExp(`(?<!${W})(${ADDR_STREET})\\.?\\s*(${ADDR_NUM})(?!${W})\\s*(?:${ADDR_SEP}\\s*)?` +
-                              `(${ADDR_NUM})\\s*[\\-\u2013\u2014]\\s*(${ADDR_NUM})(?!${W})`, "gu");
-function ocrDigits(t) { return t.replace(/[Il]/g, "1").replace(/O/g, "0").replace(/^0+(?=\d)/, ""); }
+const ADDR_STREET = Object.keys(STREET_TYPES).sort((a, b) => b.length - a.length).map(ci).join("|");
+const ADDR_NUM = "(?=[0-9IlO]{0,2}[0-9])[0-9IlO]{1,3}";
+const ADDR_LET = `[A-Za-z](?!${W})`;
+const ADDR_BIS = `${ci("bis")}(?!${W})`;
+const ADDR_SEP = `(?:#|${ci("n")}[oOº°]\\.?|${ci("n")}\\.\\s?[oOº°]|${ci("nro")}\\.?|${ci("n")}[uUúÚ]${ci("mero")})`;
+const ADDR_DASH = "[\\-–—]";
+function addrGroup(k, last) {
+  const suffix = last ? `(?:${ADDR_LET})?(?:\\s*${ADDR_BIS})?`
+                      : `(?:\\s?${ADDR_LET})?(?:\\s*${ADDR_BIS}(?:\\s?${ADDR_LET})?)?`;
+  return `(?<n${k}>${ADDR_NUM})(?<s${k}>${suffix})(?!${W})`;
+}
+const ADDR_SRC = `(?<!${W})(?<street>${ADDR_STREET})\\.?\\s*${addrGroup("1")}` +
+  `(?:\\s+(?<quad>${QUADRANTS.map(ci).join("|")})(?!${W}))?\\s*` +
+  `(?:(?:${ADDR_SEP}\\s*)?${addrGroup("2a")}\\s*${ADDR_DASH}\\s*${addrGroup("3a", true)}` +
+  `|${ADDR_SEP}\\s*${addrGroup("2b")}\\s+${addrGroup("3b", true)})(?![.,][0-9])`;
+const ADDRESS_RE = new RegExp(ADDR_SRC, "gu");
+const ADDRESS_AT = new RegExp(ADDR_SRC, "uy");
+function fold(t) {
+  return String(t).normalize("NFKD").replace(/\p{Mn}/gu, "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+}
+function ocrDigits(t) { return t.replace(/[Il]/g, "1").replace(/O/g, "0").replace(/^0+(?=[0-9])/, ""); }
+function addrNumber(num, suffix) {
+  const s = (suffix || "").replace(/\s+/g, "").toLowerCase();
+  const k = s.indexOf("bis");
+  const head = k < 0 ? s : s.slice(0, k), after = k < 0 ? "" : s.slice(k + 3);
+  return ocrDigits(num) + head + (k < 0 ? "" : " bis") + (after ? " " + after : "");
+}
+const isWordStart = c => /^[\p{L}0-9]$/u.test(c);
+function addrTail(text, i) {
+  const out = [], n = text.length;
+  let city = false;
+  const at = k => String.fromCodePoint(text.codePointAt(k));
+  while (out.length < TAIL_MAX) {
+    let comma = false;
+    while (i < n && (/\s/u.test(text[i]) || text[i] === ",")) { comma = comma || text[i] === ","; i++; }
+    if (i >= n || !isWordStart(at(i))) break;
+    ADDRESS_AT.lastIndex = i;
+    if (ADDRESS_AT.test(text)) break;
+    let j = i;
+    while (j < n && (isWordStart(at(j)) || text[j] === ".")) j += at(j).length;
+    const word = fold(text.slice(i, j)).replace(/\./g, "");
+    i = j;
+    if (CITY_WORDS.has(word)) city = true;
+    else if (city && !comma && !COMPLEMENTS.has(word)) break;
+    else out.push(word);
+  }
+  return out;
+}
+function canonicalAddresses(text) {
+  text = String(text == null ? "" : text).normalize("NFC");
+  const found = new Set();
+  for (const m of text.matchAll(ADDRESS_RE)) {
+    const g = m.groups, k = g.n2a ? "a" : "b";
+    const tail = (g.quad ? [g.quad.toLowerCase()] : []).concat(addrTail(text, m.index + m[0].length));
+    found.add([`${STREET_TYPES[g.street.toLowerCase()]} ${addrNumber(g.n1, g.s1)} # ` +
+               `${addrNumber(g["n2" + k], g["s2" + k])}-${addrNumber(g["n3" + k], g["s3" + k])}`, ...tail].join(" "));
+  }
+  return [...found].sort();
+}
 function amountDigits(text) {
   let best = "";
-  for (let n of text.match(/\d[\d.,\s]*\d|\d/g) || []) {
-    n = n.replace(/\s/g, "").replace(/[.,]\d{2}$/, "");
-    const d = n.replace(/\D/g, "");
+  for (let n of text.match(/[0-9][0-9.,\s]*[0-9]|[0-9]/g) || []) {
+    n = n.replace(/\s/g, "").replace(/[.,][0-9]{2}$/, "");
+    const d = n.replace(/[^0-9]/g, "");
     if (d.length > best.length) best = d;
   }
   return best ? (best.replace(/^0+/, "") || "0") : "";
@@ -175,11 +237,9 @@ function normRead(name, text) {
   if (text == null) return null;
   text = String(text);
   if (name === "amount") return amountDigits(text);
-  const found = new Set();
-  for (const m of text.matchAll(ADDRESS_RE))
-    found.add(`${STREET_TYPES[m[1].toLowerCase()]} ${ocrDigits(m[2])} # ${ocrDigits(m[3])}-${ocrDigits(m[4])}`);
-  if (found.size) return [...found].sort().join(",");
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const found = canonicalAddresses(text);
+  if (found.length) return found.join(",");
+  return text.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 const FIELDS = ["amount", "address"];
 function readOf(e, side) { return ((e && e.read) || {})[side] || {}; }

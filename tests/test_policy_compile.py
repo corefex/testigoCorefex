@@ -127,7 +127,7 @@ class MandateTests(unittest.TestCase):
             with_(deliver_only="la tienda"),
             with_(deliver_only=[{"name": "la tienda"}]),
             with_(deliver_only=[{"name": "la tienda", "address": "", "note": "x"}]),
-            with_(deliver_only=[{"name": "la tienda", "account": ""}]),
+            with_(deliver_only=[{"name": "la tienda", "address": "", "phone": ""}]),   # unknown key
             with_(max_per_order_cop="150000"),
             with_(max_per_order_cop=150000.0),
             with_(max_per_order_cop=True),

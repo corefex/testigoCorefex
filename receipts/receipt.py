@@ -75,14 +75,15 @@ def norm_read(name, text):
 def _amount_digits(text):
     """The whole-currency digits of the largest number in `text`: "COP 120,000",
     "$120.000,00" and "120000" all give "120000" (a 2-digit decimal part is dropped)."""
-    nums = re.findall(r"\d[\d.,\s]*\d|\d", text)
+    # ASCII digits only, as ui/app.js reads them (Python's \d also takes "٣").
+    nums = re.findall(r"[0-9][0-9.,\s]*[0-9]|[0-9]", text)
     if not nums:
         return ""
     best = ""
     for n in nums:
         n = re.sub(r"\s", "", n)
-        n = re.sub(r"[.,]\d{2}$", "", n)
-        d = re.sub(r"\D", "", n)
+        n = re.sub(r"[.,][0-9]{2}$", "", n)
+        d = re.sub(r"[^0-9]", "", n)
         if len(d) > len(best):
             best = d
     return best.lstrip("0") or "0"

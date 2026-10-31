@@ -520,6 +520,67 @@ class ReadNormalizationTests(unittest.TestCase):
         self.assertEqual(norm_read("address", "Calle 45"), "calle45")
         self.assertEqual(norm_read("address", "Recalle 45 # 12-30"), "recalle451230")
 
+    def test_trailing_quadrant_city_or_complement_is_another_address(self):
+        # review of cebf0f4 (security): the parse stopped after the third number
+        shop = norm_read("address", "Calle 45 # 12-30, Bogotá")
+        for s in ("Calle 45 # 12-30 Sur", "Calle 45 # 12-30 Este", "Calle 45 # 12-30 Norte",
+                  "Calle 45 # 12-30 Oeste", "Calle 45 Sur # 12-30", "Calle 45 # 12-30, Medellín",
+                  "Calle 45 # 12-30, Soacha", "Calle 45 # 12-30 Int. 2", "Calle 45 # 12-30 Apto 301",
+                  "Calle 45 # 12-30, Bogotá, Soacha", "Calle 45 # 12-30, Bogotá Sur",
+                  "Calle 45 # 12-30 Tienda Doña Marta"):
+            self.assertNotEqual(norm_read("address", s), shop, s)
+        self.assertEqual(norm_read("address", "Calle 45 # 12-30 Sur"), "calle 45 # 12-30 sur")
+        self.assertEqual(norm_read("address", "Calle 45 Sur # 12-30"), "calle 45 # 12-30 sur")
+        self.assertEqual(norm_read("address", "Cl 45 # 12-30, Medellín"), "calle 45 # 12-30 medellin")
+        self.assertEqual(norm_read("address", "Calle 45 # 12-30 Int. 2"), "calle 45 # 12-30 int 2")
+        self.assertEqual(norm_read("address", "Calle 45 # 12-30 and confirm the order now please"),
+                         "calle 45 # 12-30 and confirm the order")      # at most four words
+
+    def test_city_and_what_follows_it_do_not_count(self):
+        for s in ("Calle 45 # 12-30, Bogotá", "Calle 45 # 12-30, Bogota", "Calle 45 # 12-30 Bogotá D.C.",
+                  "Calle 45 # 12-30, Bogotá, D.C.", "Calle 45 # 12-30, BOGOTÁ",
+                  "Calle 45 # 12-30, Bogota\u0301 Tienda Doña Marta",
+                  "Calle 45 # 12-30, Bogotá — Tienda Doña Marta", "Calle 45 # 12-30 (simulado)",
+                  "Calle 45 # 12-30. Next line"):
+            self.assertEqual(norm_read("address", s), "calle 45 # 12-30", s)
+
+    def test_letter_and_bis_suffixes(self):
+        # review of cebf0f4: "45A" / "45 Bis" fell back to squashed text
+        cases = {"Calle 45A # 12-30": "calle 45a # 12-30", "Calle 45 A # 12-30": "calle 45a # 12-30",
+                 "Calle 45 Bis # 12-30": "calle 45 bis # 12-30", "Calle 45 bis # 12-30": "calle 45 bis # 12-30",
+                 "Calle 45A Bis # 12-30": "calle 45a bis # 12-30",
+                 "Calle 45 Bis B # 12-30": "calle 45 bis b # 12-30",
+                 "Calle 45 # 12B-30": "calle 45 # 12b-30", "Calle 45 # 12-30A": "calle 45 # 12-30a",
+                 "Carrera 80A # 7-15": "carrera 80a # 7-15", "Kr 80 a No. 7–15": "carrera 80a # 7-15"}
+        for s, want in cases.items():
+            self.assertEqual(norm_read("address", s), want, s)
+        self.assertNotEqual(norm_read("address", "Calle 45A # 12-30"), "calle 45 # 12-30")
+        self.assertNotEqual(norm_read("address", "Calle 45 Bis # 12-30"),
+                            norm_read("address", "Calle 45A # 12-30"))
+
+    def test_space_between_last_numbers_after_an_explicit_separator(self):
+        # decided in the review of cebf0f4: "#7 15" is an address; with no
+        # separator "Calle 45 12 30" stays text (too close to an amount)
+        for s in ("Carrera 80 # 7 15", "Carrera 80 #7 15", "Carrera 80 No 7 15", "Kr 80 N° 7 15"):
+            self.assertEqual(norm_read("address", s), "carrera 80 # 7-15", s)
+        self.assertEqual(norm_read("address", "Calle 45 12 30"), "calle451230")
+        # a number that runs into a thousands separator is not an address group
+        self.assertEqual(norm_read("address", "Calle 45 # 12 120.000"), "calle4512120000")
+
+    def test_multiple_addresses_with_suffixes_sorted_and_unique(self):
+        self.assertEqual(
+            norm_read("address", "Carrera 80A # 7-15 / Calle 45 # 12-30, Bogotá Cl. 45 No. 12-30"),
+            "calle 45 # 12-30,carrera 80a # 7-15")
+        self.assertEqual(norm_read("address", "Calle 45 # 12-30, Bogotá Carrera 80 # 7-15"),
+                         "calle 45 # 12-30,carrera 80 # 7-15")
+
+    def test_only_ascii_digits(self):
+        # review of cebf0f4: Python's \d also takes other scripts' digits, the
+        # ui/app.js port does not
+        self.assertEqual(norm_read("address", "Calle \u0664\u0665 # 12-30"), "calle\u0664\u06651230")
+        self.assertEqual(norm_read("amount", "COP \u0661\u0662\u0660.000"), "0")
+        self.assertEqual(norm_read("amount", "COP \u0661\u0662\u0660"), "")
+
     def test_amounts(self):
         from receipts.receipt import norm_read
         for s in ("COP 120,000", "$120.000,00", "120000", "Total COP 120,000 Simulation"):

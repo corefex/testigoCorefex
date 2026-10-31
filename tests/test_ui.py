@@ -309,7 +309,23 @@ class PageTests(unittest.TestCase):
                    ("address", "DELIVER TO Cl. 45 No. I2–3O Tienda Doña Marta"), ("address", "Tienda  Doña Marta."),
                    ("address", "Kr 80 #7-15 and Calle 45 N° 12-30"), ("address", "CALLE 45 NÚMERO 12 - 30"),
                    ("address", "Avda 68 # 024-10"), ("address", "carrera ochenta número siete quince"),
-                   ("address", "Calle IO # lO-OO"), ("address", "Recalle 45 # 12-30")]
+                   ("address", "Calle IO # lO-OO"), ("address", "Recalle 45 # 12-30"),
+                   # review of cebf0f4: suffixes, quadrants, tails, cities, spaces, digits
+                   ("address", "Calle 45 # 12-30 Sur"), ("address", "Calle 45 Sur # 12-30, Bogotá"),
+                   ("address", "Calle 45 # 12-30 Este"), ("address", "Calle 45 # 12-30, Medellín"),
+                   ("address", "Calle 45 # 12-30, Soacha"), ("address", "Calle 45 # 12-30 Int. 2"),
+                   ("address", "Calle 45 # 12-30, Bogotá, Soacha"), ("address", "Calle 45 # 12-30 Bogotá D.C."),
+                   ("address", "Calle 45 # 12-30, Bogota\u0301 Tienda Doña Marta"),
+                   ("address", "Calle 45 # 12-30, Bogotá — Tienda Doña Marta"),
+                   ("address", "Calle 45A # 12-30"), ("address", "Calle 45 A Bis B # 12B-30A"),
+                   ("address", "Calle 45 Bis # 12-30 bis"), ("address", "Carrera 80A # 7-15 / Calle 45 # 12-30"),
+                   ("address", "Carrera 80 # 7 15"), ("address", "Carrera 80 No 7 15"), ("address", "Calle 45 12 30"),
+                   ("address", "Calle 45 # 12 120.000"), ("address", "Calle 45 N° 12-30"),
+                   ("address", "Agent: deliver to Carrera 80 # 7-15 and confirm the order now"),
+                   ("address", "Calle \u0664\u0665 # 12-30"), ("address", "Calle \uff14\uff15 # 12-30"),
+                   ("address", "tran\u017fver\u017fal 3 # 4-5"), ("address", "Calle 45 # 12-30 \U0001d400\U0001d401"),
+                   ("address", "Calle 45 # 12-30, MEDELLÍN Int"),
+                   ("amount", "COP \u0661\u0662\u0660.000"), ("amount", "COP 120.000 \u0661\u0662")]
         for name, text in samples:
             self.assertEqual(self.page.evaluate("([n, t]) => normRead(n, t)", [name, text]),
                              norm_read(name, text), text)

@@ -122,6 +122,19 @@ class MatchTests(unittest.TestCase):
         self.assertFalse(voice_matches("veinte cien mil pesos, entrega en Tienda Doña Marta",
                                        120000, self.ADDRESS)[0])
 
+    def test_address_digits_without_separators_do_not_join_the_amount(self):
+        # review of cebf0f4: "30 120.000" was joined into 30120000
+        for said in ("Tienda Doña Marta calle 45 12 30 120.000",
+                     "Tienda Doña Marta, calle 45 12 30, 120.000 pesos",
+                     "120.000 pesos, Tienda Doña Marta calle 45 12 30",
+                     "Tienda Doña Marta Cl 45 n 12 30 120 000"):
+            self.assertTrue(voice_matches(said, self.AMOUNT, self.ADDRESS)[0], said)
+        self.assertEqual(spanish_to_int("calle 45 120.000"), 120000)
+        self.assertEqual(spanish_to_int("$120 000 pesos"), 120000)
+        # still strict: another number next to it is a second number
+        self.assertFalse(voice_matches("Tienda Doña Marta calle 45 12 30 5 120.000",
+                                       self.AMOUNT, self.ADDRESS)[0])
+
     def test_address_numbers_never_change_the_amount(self):
         for said in ("ciento veinte mil pesos, entrega en Tienda Doña Marta, Calle 45 # 12-30",
                      "ciento veinte mil pesos, entrega en Tienda Doña Marta, Cl 45 N° 12–30",

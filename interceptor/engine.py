@@ -164,8 +164,8 @@ class Interceptor:
         instruction for the agent (F5). Legitimate hidden text does not block."""
         code = _compact_all(capture.code_lines)
         pixels = _compact_all(capture.rendered_lines)
-        code_only = [x for x in capture.code_lines if _compact(x) and _compact(x) not in pixels]
-        pixels_only = [x for x in capture.rendered_lines if _compact(x) and _compact(x) not in code]
+        code_only = [x for x in capture.code_lines if not _covered(x, pixels)]
+        pixels_only = [x for x in capture.rendered_lines if not _covered(x, code)]
         return (filter_instructions(_dedupe(code_only)),
                 filter_instructions(_dedupe(pixels_only)))
 
@@ -179,6 +179,17 @@ def _compact(s):
 
 def _compact_all(lines):
     return "".join(_compact(x) for x in lines)
+
+
+def _covered(line, other):
+    """Every word of `line` is somewhere in the other channel. A reader may join
+    on one line what the DOM keeps apart (the account field's value and the
+    name beside it, 31 Oct), so whole lines are not compared; an instruction
+    still shows, because its words (the attacker's account, "agent") are not
+    in the other channel at all."""
+    words = [_compact(w) for w in str(line).split()]
+    words = [w for w in words if w]
+    return not words or all(w in other for w in words)
 
 
 def _norm(s):

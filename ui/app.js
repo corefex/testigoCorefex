@@ -42,7 +42,8 @@ const ICON = {
 // -- state, rebuilt from events ------------------------------------------
 function freshRun() {
   return { mode: null, scenario: null, variant: null, log: [], frames: {}, lastFrame: null,
-           check: null, approval: null, granted: null, payment: null, verify: null, receipt: null };
+           check: null, approval: null, granted: null, payment: null, verify: null, verifies: [],
+           receipt: null };
 }
 const S = {
   conn: "connecting", test: false, current: null,
@@ -88,13 +89,14 @@ function apply(e, follow) {
       r.check = e;
       if (e.status !== "ok") follow(4);
       break;
-    case "approval.requested": r.approval = e; follow(5); loadDesk(); break;
+    // a new approval: any earlier answer was for the earlier approval
+    case "approval.requested": r.approval = e; r.granted = null; follow(5); loadDesk(); break;
     case "approval.granted": r.granted = e; stopRecording(true); loadDesk(); break;
     case "payment.executed":
       r.payment = e;
       if (r.mode === "no_supervisor") follow(3);
       break;
-    case "verify.result": r.verify = e; follow(6); break;
+    case "verify.result": r.verifies.push(e); r.verify = e; follow(6); break;
     case "receipt.signed": r.receipt = e; forgetReceipt(); break;
   }
 }
@@ -104,7 +106,10 @@ function agentState(r) {
   if (r.mode === "no_supervisor") return { cls: "off", icon: ICON.warn, text: "No supervisor" };
   if (r.check && r.check.status === "cannot_verify") return { cls: "warn", icon: ICON.ask, text: "Blocked · ask a human" };
   if (r.check && r.check.status !== "ok") return { cls: "bad", icon: ICON.stop, text: "Blocked" };
-  if (r.verify && r.verify.status === "mismatch") return { cls: "bad", icon: ICON.stop, text: "Flagged" };
+  const vo = verifyOutcome(r);
+  if (vo.kind === "blocked") return { cls: "bad", icon: ICON.stop, text: "Blocked at review" };
+  if (vo.kind === "flagged") return { cls: "bad", icon: ICON.stop, text: "Flagged for review" };
+  if (vo.kind === "cannot") return { cls: "warn", icon: ICON.ask, text: vo.moment === "review" ? "Blocked · could not verify" : "Flagged · could not verify" };
   if (r.granted && !isGranted(r.granted)) return { cls: "bad", icon: ICON.stop, text: "Denied" };
   if (r.approval && !r.granted) return { cls: "warn", icon: ICON.pause, text: "Paused · approval" };
   return { cls: "ok", icon: ICON.eye, text: r.receipt ? "Done" : "Running" };
@@ -126,6 +131,65 @@ function empty(title, sub) {
 function allowedAccounts() {
   return S.policy ? S.policy.pay_only.map(p => p.account) : [];
 }
+// -- F8: compare by the values read from the pixels (receipts/receipt.py norm_read)
+// Real crops of unchanged content hash differently across captures, so view 6
+// never compares hashes when read values exist.
+const ACCOUNT_RE = /(?<![\w])([\dIlO]{3})[\s\-–—]?([\dxX*]{3})[\s\-–—]?([\dIlO]{4})(?![\w])/g;
+function ocrDigits(t) { return t.replace(/[Il]/g, "1").replace(/O/g, "0"); }
+function amountDigits(text) {
+  let best = "";
+  for (let n of text.match(/\d[\d.,\s]*\d|\d/g) || []) {
+    n = n.replace(/\s/g, "").replace(/[.,]\d{2}$/, "");
+    const d = n.replace(/\D/g, "");
+    if (d.length > best.length) best = d;
+  }
+  return best ? (best.replace(/^0+/, "") || "0") : "";
+}
+function normRead(name, text) {
+  if (text == null) return null;
+  text = String(text);
+  if (name === "amount") return amountDigits(text);
+  const acc = new Set();
+  for (const m of text.matchAll(ACCOUNT_RE))
+    acc.add(`${ocrDigits(m[1])}-${m[2].toLowerCase().replace(/\*/g, "x")}-${ocrDigits(m[3])}`);
+  if (acc.size) return [...acc].sort().join(",");
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+const FIELDS = ["amount", "recipient"];
+function readOf(e, side) { return ((e && e.read) || {})[side] || {}; }
+// "diff" | "unread" | "" for one field of a verify.result
+function fieldState(e, n) {
+  const a = readOf(e, "approved"), x = readOf(e, "executed");
+  const anyRead = Object.keys(a).length || Object.keys(x).length;
+  if (anyRead) {
+    if (x[n] == null) return "unread";
+    return normRead(n, a[n]) !== normRead(n, x[n]) ? "diff" : "";
+  }
+  // neither side has read values (old events, fixtures): the hashes are all there is
+  return (e.approved || {})[n] !== (e.executed || {})[n] ? "diff" : "";
+}
+function diffFields(e) { return FIELDS.filter(n => fieldState(e, n) === "diff"); }
+function cannotReason(e) {
+  if (e.reason) return e.reason;
+  const miss = FIELDS.filter(n => fieldState(e, n) === "unread");
+  return miss.length ? `could not read the ${miss.join(" and ")} on the screen` : "the pixels could not be read with confidence";
+}
+// The verdict of F8 over the run's verify.result events (review, then result).
+// An event without `moment` is an older after-the-click one.
+function verifyOutcome(r) {
+  const vs = (r && r.verifies) || [];
+  const last = f => { for (let i = vs.length - 1; i >= 0; i--) if (f(vs[i])) return vs[i]; return null; };
+  const review = last(e => e.moment === "review"), result = last(e => e.moment !== "review");
+  const bad = review && review.status !== "match" ? review : (result && result.status !== "match" ? result : null);
+  if (bad) {
+    const kind = bad.status === "cannot_verify" ? "cannot" : (bad === review ? "blocked" : "flagged");
+    return { kind, moment: bad === review ? "review" : "result", event: bad, review, result };
+  }
+  if (result) return { kind: "verified", moment: "result", event: result, review, result };
+  if (review) return { kind: "reviewed", moment: "review", event: review, review, result };
+  return { kind: null, event: null, review, result };
+}
+
 function wave(state, n) {
   let bars = "";
   for (let i = 0; i < (n || 42); i++) {
@@ -168,9 +232,15 @@ function logLine(e) {
       ? [ICON.check, "ok", "Approved · voice + passkey", e.voice_transcript]
       : [ICON.stop, "bad", e.voice_match ? "Not approved · denied" : "Voice did not match · denied", e.voice_transcript];
     case "payment.executed": return [ICON.coin, "info", "Portal recorded a payment", `${cop(e.amount_cop)} → ${e.recipient}`];
-    case "verify.result": return e.status === "match"
-      ? [ICON.check, "ok", "Verified after the click", "executed = approved"]
-      : [ICON.stop, "bad", "Mismatch after the click", "held for review"];
+    case "verify.result": {
+      const review = e.moment === "review";
+      if (e.status === "match") return [ICON.check, "ok", review ? "Review screen matches the approval" : "Verified after the click",
+                                        review ? "re-read before confirming" : "executed = approved"];
+      if (e.status === "cannot_verify") return [ICON.ask, "warn", review ? "Could not verify the review · blocked" : "Could not verify the result · flagged",
+                                                 cannotReason(e)];
+      return review ? [ICON.stop, "bad", "Blocked at review", "payment not sent: " + diffFields(e).join(", ") + " changed"]
+                    : [ICON.stop, "bad", "Mismatch after the click", "flagged for review"];
+    }
     case "receipt.signed": return isPlaceholder(e.signature)
       ? [ICON.warn, "warn", "Receipt built · not signed yet", e.id]
       : [ICON.seal, "ok", "Receipt signed", e.id];
@@ -186,12 +256,15 @@ function timeline(r) {
   }).join("")}</ol>`;
 }
 
-// `note` says where readText comes from when there is no crop image to show
-function crop(label, image, readText, hash, diff, note) {
+// `note` says where readText comes from when there is no crop image to show;
+// `state` is "" | "diff" | "unread" (true means "diff"); `readUnder` is the
+// value read from the pixels, shown under the crop image when there is one.
+function crop(label, image, readText, hash, state, note, readUnder) {
+  const cls = state === true || state === "diff" ? " diff" : state === "unread" ? " unread" : "";
   const px = image
-    ? `<img src="${runUrl(image)}" alt="${esc(label)} crop">`
+    ? `<div><img src="${runUrl(image)}" alt="${esc(label)} crop">${readUnder != null ? `<div class="note">read: <span class="mono">${esc(readUnder)}</span></div>` : ""}</div>`
     : `<div><div class="read">${esc(readText || "—")}</div><div class="note">${esc(note || "read from pixels · crop image not in this event")}</div></div>`;
-  return `<div class="crop${diff ? " diff" : ""}"><div class="lbl">${esc(label)}</div>` +
+  return `<div class="crop${cls}"><div class="lbl">${esc(label)}</div>` +
          `<div class="px">${px}</div><div class="hash">sha256 ${esc(short(hash))}</div></div>`;
 }
 
@@ -345,11 +418,17 @@ const render = {
     let diff = "";
     if (state === "nomatch" && !g && voice) {
       const lines = [];
-      if (!voice.amount_match) lines.push(`Amount heard ${esc(voice.heard_amount == null ? "none" : cop(voice.heard_amount))} · screen ${esc(cop(a.amount_cop))}`);
+      if (voice.negated && voice.negated.length) lines.push(`Heard “${esc(voice.negated.join(" "))}”: a no or a cancel is never an approval`);
+      else if (!voice.amount_match) lines.push(voice.heard_amount == null
+        ? `Amount: ${esc(voice.amount_reason || "none heard")} · screen ${esc(cop(a.amount_cop))}`
+        : `Amount heard ${esc(cop(voice.heard_amount))} · screen ${esc(cop(a.amount_cop))}`);
       if (!voice.recipient_match) lines.push(`Recipient “${esc(voice.recipient_name)}” not heard`);
       diff = `<div class="vdiff">${lines.map(l => `<div>${ICON.stop}<span>${l}</span></div>`).join("")}</div>`;
     }
-    const open = !g && !!d && !d.decision;      // the run is waiting for this person
+    // the run is waiting for this person. Once the run's answer for this approval
+    // arrives (e.g. denied on timeout even if its closing POST failed and the
+    // service still shows the approval pending), nothing is offered any more.
+    const open = !g && !!d && !d.decision;
     const busy = rec !== "idle" || S.deskBusy;
     let controls = "";
     if (open) {
@@ -358,7 +437,7 @@ const render = {
         : `<button class="btn rec" id="vrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${voice ? "Record again" : "Record"}</button>`;
       const meta = voice
         ? `Attempt ${esc(d.attempts)} · Voice Transcribe ${esc(voice.latency_ms == null ? "—" : Math.round(voice.latency_ms) + " ms")}`
-        : "Up to 20 s · the audio is not kept";
+        : `Up to ${MAX_REC_S} s · the audio is not kept`;
       controls = `<div class="vctl">${recBtn}<span class="muted small">${meta}</span></div>`;
     } else if (!g && !d) {
       controls = `<div class="vctl"><span class="muted small">${S.deskChecked
@@ -393,31 +472,66 @@ const render = {
   },
 
   after() {
-    const r = S.runs.supervised, v = r.verify;
-    const head = `<h1 class="title">Checked again after the click</h1>
-      <p class="lede">What executed is compared, in pixels, with what was approved.</p>`;
-    if (!v) return head + empty("Nothing executed yet", "After an approved payment, its crops are compared here.");
+    const r = S.runs.supervised, vo = verifyOutcome(r), v = vo.event;
+    const head = `<h1 class="title">Checked again before and after the click</h1>
+      <p class="lede">What is about to execute, and what executed, is read again in pixels and compared with what was approved.</p>`;
+    if (!v) return head + empty("Nothing to compare yet", "After an approved payment, the review screen and the result are compared here.");
+    const review = v.moment === "review";
     const im = v.images || {}, ia = im.approved || {}, ie = im.executed || {};
+    const ra = readOf(v, "approved"), rx = readOf(v, "executed");
     const a = r.approval || {};
-    const dAmt = v.approved.amount !== v.executed.amount, dRec = v.approved.recipient !== v.executed.recipient;
-    const ok = v.status === "match";
+    const shown = (n, side) => {
+      const rd = side === "approved" ? ra : rx;
+      if (rd[n] != null) return n === "amount" && /^\d+$/.test(String(rd[n])) ? cop(rd[n]) : rd[n];
+      if (side === "approved") return n === "amount" ? cop(a.amount_cop) : a.recipient;
+      return null;
+    };
+    const cell = (n, side) => {
+      const st = side === "executed" ? fieldState(v, n) : "";
+      const txt = shown(n, side);
+      const note = st === "diff" ? "read from the pixels · differs from what was approved"
+        : st === "unread" ? "could not be read on this screen"
+        : side === "approved" ? "read from the pixels when approved" : "read from the pixels · same as approved";
+      return crop(n === "amount" ? "Amount" : "Recipient", (side === "approved" ? ia : ie)[n],
+                   txt == null ? "—" : txt, (side === "approved" ? v.approved : v.executed)[n], st, note, txt);
+    };
+    const mchip = e => !e ? chip("off", ICON.dot, "not reached")
+      : e.status === "match" ? chip("ok", ICON.check, "Match")
+      : e.status === "cannot_verify" ? chip("warn", ICON.ask, "Could not verify")
+      : chip("bad", ICON.stop, "Mismatch");
+    const moments = `<div class="moments">
+        <div><span class="muted small">1 · Review screen, before confirming</span>${mchip(vo.review)}</div>
+        <div><span class="muted small">2 · Result, after the click</span>${vo.kind === "blocked" || (vo.kind === "cannot" && review)
+          ? chip("off", ICON.dot, "never happened") : mchip(vo.result)}</div></div>`;
     const pay = r.payment;
-    return head + `<div class="after">
-        <div><h2>Approved</h2><div class="stack">
-          ${crop("Amount", ia.amount, cop(a.amount_cop), v.approved.amount)}
-          ${crop("Recipient", ia.recipient, a.recipient, v.approved.recipient)}</div></div>
-        <div><h2>Executed</h2><div class="stack">
-          ${crop("Amount", ie.amount, dAmt ? "Changed" : cop(a.amount_cop), v.executed.amount, dAmt,
-                 dAmt ? "pixels differ from the approved crop" : "same pixels as the approved crop")}
-          ${crop("Recipient", ie.recipient, dRec ? (pay ? pay.recipient : "Changed") : a.recipient, v.executed.recipient, dRec,
-                 dRec ? (pay ? "pixels differ · text from the portal record" : "pixels differ from the approved crop")
-                      : "same pixels as the approved crop")}</div></div>
+    const record = pay ? `<div class="muted small" style="margin-top:8px">Portal record: ${esc(cop(pay.amount_cop))} → <span class="mono">${esc(pay.recipient)}</span></div>` : "";
+    const diffs = diffFields(v);
+    let stamp, verdict;
+    if (vo.kind === "blocked") {
+      stamp = `<span class="stamp bad">${ICON.stop}Blocked at review</span>`;
+      verdict = `${chip("bad", ICON.stop, "Payment not sent", true)}
+        <div class="why">The review screen did not show what you approved (${esc(diffs.join(" and ") || "a field")} changed). The confirm click never happened.</div>`;
+    } else if (vo.kind === "flagged") {
+      stamp = `<span class="stamp bad">${ICON.stop}MISMATCH</span>`;
+      verdict = `${chip("bad", ICON.stop, "Flagged for review", true)}
+        <div class="why">What executed is not what you approved (${esc(diffs.join(" and ") || "a field")}). The receipt is marked.</div>${record}`;
+    } else if (vo.kind === "cannot") {
+      stamp = `<span class="stamp warn">${ICON.ask}Could not verify</span>`;
+      verdict = `${chip("warn", ICON.ask, review ? "Payment not sent" : "Flagged for review", true)}
+        <div class="why">${esc(cannotReason(v))}. ${review ? "Without a clear match the confirm click is not made." : "The receipt is marked for a person to check."}</div>${review ? "" : record}`;
+    } else if (vo.kind === "verified") {
+      stamp = `<span class="stamp ok">${ICON.check}VERIFIED</span>`;
+      verdict = `${chip("ok", ICON.check, "Payment completed", true)}
+        <div class="why">Executed = approved, read in pixels${vo.review ? " on the review screen and after the click" : " after the click"}.</div>${record}`;
+    } else {
+      stamp = `<span class="stamp info">${ICON.pause}Review matches</span>`;
+      verdict = `${chip("info", ICON.pause, "Confirming · waiting for the result", true)}`;
+    }
+    return head + moments + `<div class="after">
+        <div><h2>Approved</h2><div class="stack">${cell("amount", "approved")}${cell("recipient", "approved")}</div></div>
+        <div><h2>${review ? "On the review screen" : "Executed"}</h2><div class="stack">${cell("amount", "executed")}${cell("recipient", "executed")}</div></div>
       </div>
-      <div class="outcome">
-        <span class="stamp ${ok ? "ok" : "bad"}">${ok ? ICON.check : ICON.stop}${ok ? "VERIFIED" : "MISMATCH"}</span>
-        <div>${ok ? chip("ok", ICON.check, "Payment completed", true) : chip("bad", ICON.stop, "Flagged for review — held", true)}
-          ${pay ? `<div class="muted small" style="margin-top:8px">Portal record: ${esc(cop(pay.amount_cop))} → <span class="mono">${esc(pay.recipient)}</span></div>` : ""}</div>
-      </div>`;
+      <div class="outcome">${stamp}<div>${verdict}</div></div>`;
   },
 
   receipt() {
@@ -437,7 +551,13 @@ const render = {
       stale = `<div class="notice warn" style="margin:0 0 16px">${ICON.warn}<div><b>Not from this run.</b> ${esc(why)}
         Showing the newest receipt file under runs/, from ${esc(new Date(rc.modified * 1000).toLocaleString("en-US"))}.</div></div>`;
     }
-    const diff = k => d.approved && d.executed && d.approved[k] !== d.executed[k];
+    const blocked = d.status === "blocked";
+    // by the values read from the pixels when the receipt has them (hashes of real captures differ)
+    const diff = k => {
+      if (blocked || !d.approved || !d.executed) return false;
+      if (d.approved_read && d.executed_read) return normRead(k, d.approved_read[k]) !== normRead(k, d.executed_read[k]);
+      return d.approved[k] !== d.executed[k];
+    };
     const row = (k, v, cls) => `<dt>${esc(k)}</dt><dd class="${cls || ""}">${esc(v)}</dd>`;
     const vo = S.verify;
     let out = `<span class="p">$</span> testigo verify ${esc("runs/" + rc.path)}\n`;
@@ -448,12 +568,16 @@ const render = {
       out += "\n" + lines.map(l => esc(l).replace(/✓/g, '<span class="y">✓</span>').replace(/✗/g, '<span class="n">✗</span>')).join("\n") +
         `<span class="last ${vo.exit_code === 0 ? "y" : "n"}">${esc(last)}</span>`;
     } else out += `\n<span style="color:#8B97A6">Press “Run verify” to run the real command.</span>`;
-    return head + stale + `<div class="split">
+    const blockedNote = blocked ? `<div class="alert" style="margin:0 0 16px">${ICON.stop}<div><div class="t">Blocked at ${esc(d.blocked_at || "review")} — nothing executed</div>
+        <div class="s">The approval is signed; the screen before confirming did not match it, so the payment was never sent. Verify still checks the signature and the approved crops.</div></div></div>` : "";
+    return head + stale + blockedNote + `<div class="split">
       <div class="panel receipt"><header><span class="t">${ICON.file.replace("<svg", '<svg width="16" height="16"')} receipt.json</span><span class="r">runs/${esc(rc.path)}</span></header>
         <dl>${row("id", d.id)}${row("time", d.time)}${row("agent", d.agent)}${row("action", d.action)}
           ${row("policy", short(d.policy_sha256))}
           ${row("approved", "amount " + short((d.approved || {}).amount) + " · recipient " + short((d.approved || {}).recipient))}
-          ${row("executed", "amount " + short((d.executed || {}).amount) + " · recipient " + short((d.executed || {}).recipient), diff("amount") || diff("recipient") ? "diff" : "")}
+          ${row("status", blocked ? "blocked at " + (d.blocked_at || "review") + " — nothing executed" : (d.status || "confirmed"), blocked ? "diff" : "")}
+          ${blocked || !d.executed ? row("executed", "— nothing executed", "muted")
+            : row("executed", "amount " + short(d.executed.amount) + " · recipient " + short(d.executed.recipient), diff("amount") || diff("recipient") ? "diff" : "")}
           ${row("approval", ((d.approval || {}).method || "") + " · “" + ((d.approval || {}).voice_transcript || "") + "”")}
           ${row("signed by", d.signed_by || "")}${row("signature", d.signature)}</dl>
       </div>
@@ -464,29 +588,46 @@ const render = {
 
   bench() {
     const b = S.bench;
-    const head = `<div class="k">Attacks that succeed</div>`;
+    const head = `<div class="k">Attacks that got paid</div>`;
+    const lbls = `<div class="lbls"><span>without TESTIGO+</span><span>with TESTIGO+</span></div>`;
     if (!b) return `<div class="bench">${head}</div>`;
-    if (!b.available || !b.data || !b.data.summary) {
+    const s = b.available && b.data && b.data.summary;
+    const counted = x => x && Number.isFinite(x.succeeded) && Number.isFinite(x.runs);
+    if (!s || !counted(s.attacks_succeed_without) || !counted(s.attacks_succeed_with)) {
       return `<div class="bench">${head}
-        <div class="num none"><span>—%</span><span class="arrow">→</span><span>—%</span></div>
-        <div class="lbls"><span>without TESTIGO+</span><span>with TESTIGO+</span></div>
+        <div class="num none"><span>—</span><span class="arrow">→</span><span>—</span></div>${lbls}
         <div class="notice warn">${ICON.warn}<div><b>No WitnessBench results yet.</b> This view reads
-        <span class="mono">runs/bench_results.json</span>, written by the 20 real runs. Numbers are never typed in by hand.</div></div></div>`;
+        <span class="mono">runs/bench_results.json</span>, written by the real WitnessBench runs. Numbers are never typed in by hand.</div></div></div>`;
     }
-    const s = b.data.summary;
+    const wo = s.attacks_succeed_without, wi = s.attacks_succeed_with;
+    const of = x => `${esc(x.succeeded)} of ${esc(x.runs)}`;
     const LABEL = { a1: "Hidden text in page code", a2: "Text painted in an image", a3: "Change after approval" };
+    const bar = (lbl, cls, x) => {
+      const w = counted(x) && x.runs > 0 ? x.succeeded / x.runs * 100 : 0;
+      return `<div class="bar"><span>${lbl}</span><div class="track"><div class="fill ${cls}" style="width:${Math.max(0, Math.min(100, w))}%"></div></div>` +
+             `<span class="pct">${counted(x) ? of(x) : "—"}</span></div>`;
+    };
     const bars = Object.keys(LABEL).map(k => {
       const x = (s.by_attack || {})[k];
       if (!x) return "";
-      const bar = (lbl, cls, v) => `<div class="bar"><span>${lbl}</span><div class="track"><div class="fill ${cls}" style="width:${Math.max(0, Math.min(100, v))}%"></div></div><span class="pct">${Math.round(v)}%</span></div>`;
-      return `<div class="g"><div class="t">${LABEL[k]}</div>${bar("without", "no", x.without_pct)}${bar("with", "yes", x.with_pct)}</div>`;
+      return `<div class="g"><div class="t">${LABEL[k]} <span class="muted mono">${k}</span></div>${bar("without", "no", x.without)}${bar("with", "yes", x.with)}</div>`;
     }).join("");
-    const fp = s.false_positives || {};
+    const fp = s.false_positives || {}, lat = s.added_latency_ms || {};
+    const sec = ms => Number.isFinite(ms) ? (ms / 1000).toFixed(1) + " s" : "—";
+    const fpText = Number.isFinite(fp.count) && Number.isFinite(fp.clean_runs) ? `${esc(fp.count)} of ${esc(fp.clean_runs)} clean runs` : "—";
+    const resisted = Number(s.agent_resisted_without_supervisor) > 0
+      ? `<div class="resisted">${ICON.user}<span>Wonder refused ${esc(s.agent_resisted_without_supervisor)} attack${s.agent_resisted_without_supervisor === 1 ? "" : "s"} on its own, without TESTIGO+.</span></div>` : "";
+    const edges = Array.isArray(s.edge_cases) && s.edge_cases.length
+      ? `<div class="limits"><h3>Known limits</h3><ul>${s.edge_cases.map(x => {
+          const out = x.paid_attacker ? "paid" : x.blocked ? "blocked" : "not paid";
+          return `<li><b>${esc(x.name || x.scenario || "edge case")}</b> <span class="mono muted">${esc([x.scenario, x.variant != null ? "v" + x.variant : "", x.mode].filter(Boolean).join(" · "))}</span> — ${esc(out)}${x.status ? " · " + esc(x.status) : ""}</li>`;
+        }).join("")}</ul><div class="muted small">Counted apart; they never move the main number.</div></div>` : "";
     return `<div class="bench">${head}
-      <div class="num"><span class="from">${Math.round(s.attacks_succeed_without_pct)}%</span><span class="arrow">→</span><span class="to">${Math.round(s.attacks_succeed_with_pct)}%</span></div>
-      <div class="lbls"><span>without TESTIGO+</span><span>with TESTIGO+</span></div>
+      <div class="num"><span class="from">${esc(wo.succeeded)}<small> of ${esc(wo.runs)}</small></span><span class="arrow">→</span><span class="to">${esc(wi.succeeded)}<small> of ${esc(wi.runs)}</small></span></div>
+      ${lbls}
       <div class="bars">${bars}</div>
-      <div class="meta">False positives on clean runs: ${esc(fp.count)} of ${esc(fp.clean_runs)} · added latency ${esc(Math.round(s.mean_added_latency_ms))} ms per action</div>
+      <div class="meta">False positives: <b>${fpText}</b> · Added latency: <b>median ${esc(sec(lat.median))} · p90 ${esc(sec(lat.p90))}</b>${Number.isFinite(lat.n) && lat.n ? ` <span class="muted">(n=${esc(lat.n)})</span>` : ""}</div>
+      ${resisted}${edges}
     </div>`;
   },
 };
@@ -552,8 +693,8 @@ setInterval(() => {
 }, 1500);
 
 async function decide(decision) {
-  const d = deskFor(S.runs.supervised.approval);
-  if (!d || S.deskBusy) return;
+  const r = S.runs.supervised, d = deskFor(r.approval);
+  if (!d || S.deskBusy || r.granted) return;      // the run already answered this approval
   S.deskBusy = true; S.rec.error = ""; draw();
   try {
     S.desk = await getJSON(`/api/approval/${encodeURIComponent(d.id)}/decision`, {
@@ -563,7 +704,8 @@ async function decide(decision) {
   S.deskBusy = false; draw();
 }
 
-const MAX_REC_S = 20, WAV_RATE = 16000;
+// the service refuses audio over 20 s: stop at 18 s, and trim to that when encoding
+const MAX_REC_S = 18, WAV_RATE = 16000;
 let mic = null;
 async function startRecording() {
   if (S.rec.state !== "idle") return;
@@ -614,7 +756,7 @@ function wavBase64(chunks, rate) {
   let n = 0; chunks.forEach(c => { n += c.length; });
   const pcm = new Float32Array(n); let o = 0;
   chunks.forEach(c => { pcm.set(c, o); o += c.length; });
-  const ratio = rate / WAV_RATE, len = Math.floor(n / ratio);
+  const ratio = rate / WAV_RATE, len = Math.min(Math.floor(n / ratio), MAX_REC_S * WAV_RATE);
   const buf = new ArrayBuffer(44 + len * 2), v = new DataView(buf);
   const str = (off, t) => { for (let i = 0; i < t.length; i++) v.setUint8(off + i, t.charCodeAt(i)); };
   str(0, "RIFF"); v.setUint32(4, 36 + len * 2, true); str(8, "WAVE"); str(12, "fmt ");

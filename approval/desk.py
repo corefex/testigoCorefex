@@ -57,6 +57,9 @@ class ApprovalDesk:
         left open by an earlier run is closed as denied (superseded)."""
         if not isinstance(event, dict) or event.get("type") != "approval.requested":
             raise DeskError(422, "event must be an approval.requested event")
+        amount = event.get("amount_cop")
+        if not isinstance(amount, int) or isinstance(amount, bool):
+            raise DeskError(422, "amount_cop must be an integer (whole pesos)")
         with self._lock:
             old = self._rec
             if old is not None and old["decision"] is None:
@@ -98,14 +101,18 @@ class ApprovalDesk:
             self._pending(rec)
             e = rec["event"]
             ok, detail = voice_match.voice_matches(transcript, e["amount_cop"], e["recipient"])
+            amt_ok, heard, amt_why = voice_match.amount_check(
+                transcript, e["amount_cop"], e["recipient"])
             rec["voice"] = {
                 "transcript": str(transcript or ""),
                 "match": ok,
                 "detail": detail,
-                "heard_amount": voice_match.spanish_to_int(transcript),
-                "amount_match": voice_match.amount_matches(transcript, e["amount_cop"]),
+                "heard_amount": heard,
+                "amount_match": amt_ok,
+                "amount_reason": amt_why,
                 "recipient_match": voice_match.recipient_matches(transcript, e["recipient"]),
                 "recipient_name": voice_match.name_of(e["recipient"]),
+                "negated": voice_match.negated(transcript, e["recipient"]),
                 "latency_ms": latency_ms,
                 "at": self._now(),
             }

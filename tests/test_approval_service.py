@@ -92,6 +92,31 @@ class DeskTests(unittest.TestCase):
             d.get(old["id"])
         self.assertEqual(e.exception.status, 404)
 
+    def test_open_needs_an_integer_amount(self):
+        d = ApprovalDesk()
+        for amount in (120000.0, "120000", True, None):
+            with self.assertRaises(DeskError) as e:
+                d.open(dict(approval_event(), amount_cop=amount))
+            self.assertEqual(e.exception.status, 422, amount)
+        self.assertIsNone(d.current())
+
+    def test_voice_record_says_why(self):
+        d = ApprovalDesk()
+        rec = d.open(approval_event())
+        d.start_voice(rec["id"])
+        v = d.record_voice(rec["id"], "no pagues " + GOOD)["voice"]
+        self.assertFalse(v["match"])
+        self.assertEqual(v["negated"], ["no"])
+        d.start_voice(rec["id"])
+        v = d.record_voice(rec["id"], "cinco mil, ciento quince mil a Distribuidora X")["voice"]
+        self.assertFalse(v["amount_match"])
+        self.assertIsNone(v["heard_amount"])
+        self.assertTrue(v["amount_reason"])
+        big = d.open(dict(approval_event(), amount_cop=2_000_000_000))
+        d.start_voice(big["id"])
+        v = d.record_voice(big["id"], "dos mil millones a Distribuidora X")["voice"]
+        self.assertIn("out of range", v["amount_reason"])
+
     def test_voice_attempts_are_capped(self):
         d = ApprovalDesk()
         rec = d.open(approval_event())
@@ -206,6 +231,14 @@ class ApprovalServiceTests(unittest.TestCase):
                                                                    "images": images}).status_code,
                           (404, 422), images)
 
+    def test_open_refuses_a_non_integer_amount(self):
+        for amount in (120000.5, 120000.0):
+            r = self.c.post("/api/approval/open",
+                            json={"event": dict(approval_event(), amount_cop=amount)})
+            self.assertEqual(r.status_code, 422, amount)
+            self.assertIn("integer", r.json()["detail"])
+        self.assertIsNone(self.c.get("/api/approval").json()["approval"])
+
     def test_crop_images_under_runs(self):
         (self.tmp / "r1").mkdir()
         (self.tmp / "r1" / "crop_amount.png").write_bytes(b"\x89PNG fake")
@@ -301,11 +334,35 @@ class ServiceApproverTests(unittest.TestCase):
     def test_decision_for_another_event_or_without_match_is_a_denial(self):
         a = ServiceApprover(http=lambda *a: None, sleep=lambda s: None)
         other = dict(approval_event(), amount_cop=999)
-        rec = {"decision": "approve", "event": other, "voice": {"match": True, "transcript": GOOD}}
-        self.assertFalse(a._result(approval_event(), rec)[0])
-        rec = {"decision": "approve", "event": approval_event(),
+        rec = {"id": "a1", "decision": "approve", "event": other,
+               "voice": {"match": True, "transcript": GOOD}}
+        self.assertFalse(a._result(approval_event(), rec, "a1")[0])
+        rec = {"id": "a1", "decision": "approve", "event": approval_event(),
                "voice": {"match": False, "transcript": WRONG}}
-        self.assertFalse(a._result(approval_event(), rec)[0])
+        self.assertFalse(a._result(approval_event(), rec, "a1")[0])
+        good = {"id": "a1", "decision": "approve", "event": approval_event(),
+                "voice": {"match": True, "transcript": GOOD}}
+        self.assertTrue(a._result(approval_event(), good, "a1")[0])
+
+    def test_decision_for_another_record_id_is_a_denial(self):
+        a = ServiceApprover(http=lambda *a: None, sleep=lambda s: None)
+        rec = {"id": "someone-else", "decision": "approve", "event": approval_event(),
+               "voice": {"match": True, "transcript": GOOD}}
+        granted, info = a._result(approval_event(), rec, "a1")
+        self.assertFalse(granted)
+        self.assertIn("different approval", info["reason"])
+
+    def test_run_rechecks_the_voice_itself(self):
+        """A service that says match for a transcript that does not match the
+        event (a bug, or a tampered record) is not trusted."""
+        a = ServiceApprover(http=lambda *a: None, sleep=lambda s: None)
+        for said in (WRONG, "no pagues " + GOOD, "cinco mil, ciento quince mil a Distribuidora X"):
+            rec = {"id": "a1", "decision": "approve", "event": approval_event(),
+                   "voice": {"match": True, "transcript": said}}
+            granted, info = a._result(approval_event(), rec, "a1")
+            self.assertFalse(granted, said)
+            self.assertIn("re-checked", info["reason"])
+            self.assertFalse(info["voice_match"])
 
     def test_images_for_are_sent_and_a_refused_image_still_opens(self):
         a = self.approver(self.person(GOOD), http=client_http(self.c))

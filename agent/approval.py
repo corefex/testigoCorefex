@@ -16,6 +16,8 @@ import time
 import urllib.error
 import urllib.request
 
+from approval.voice_match import voice_matches
+
 
 class Approver:
     def approve(self, approval_event):      # pragma: no cover - interface
@@ -154,7 +156,7 @@ class ServiceApprover(Approver):
             if status == 200 and isinstance(got, dict):
                 rec = got
                 if rec.get("decision"):
-                    return self._result(approval_event, rec)
+                    return self._result(approval_event, rec, aid)
             elif status == 404:
                 return self._denied("the approval was closed on the service", rec.get("voice"))
             if self.monotonic() >= deadline:
@@ -168,20 +170,29 @@ class ServiceApprover(Approver):
         elif status == 409:                   # the person decided at the last moment
             status, got = self._call("GET", "/api/approval/%s" % aid)
             if status == 200 and isinstance(got, dict) and got.get("decision"):
-                return self._result(approval_event, got)
+                return self._result(approval_event, got, aid)
         return self._denied(reason, rec.get("voice"))
 
-    def _result(self, approval_event, rec):
+    def _result(self, approval_event, rec, aid):
+        """The service's decision, trusted only if it is for the approval this
+        run opened and the voice, re-checked here against the event, agrees."""
         voice = rec.get("voice") or {}
         ev = rec.get("event") or {}
+        if rec.get("id") != aid:
+            return self._denied("the decision is for a different approval", voice)
         if (ev.get("crops") != approval_event.get("crops")
                 or ev.get("amount_cop") != approval_event.get("amount_cop")
                 or ev.get("recipient") != approval_event.get("recipient")):
             return self._denied("the decision is for a different approval", voice)
-        if rec["decision"] != "approve":
+        if rec.get("decision") != "approve":
             return self._denied(rec.get("reason") or "denied by the person", voice)
         if not voice.get("match"):
             return self._denied("approve without a voice that matched", voice)
+        ok, detail = voice_matches(voice.get("transcript", ""), approval_event.get("amount_cop"),
+                                   approval_event.get("recipient"))
+        if not ok:
+            return self._denied("the voice re-checked by the run does not match (%s)" % detail,
+                                dict(voice, match=False))
         return True, {"method": self.METHOD, "voice_transcript": voice.get("transcript", ""),
                       "voice_match": True}
 

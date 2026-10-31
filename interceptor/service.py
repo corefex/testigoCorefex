@@ -344,6 +344,9 @@ async def approval_open(request: Request):
         raise HTTPException(422, str(e))
     if event["type"] != "approval.requested":
         raise HTTPException(422, "event must be an approval.requested event")
+    amount = event.get("amount_cop")
+    if not isinstance(amount, int) or isinstance(amount, bool):
+        raise HTTPException(422, "approval.requested.amount_cop must be an integer (whole pesos)")
     return _desk(desk.open, event, crop_images(body.get("images")))
 
 

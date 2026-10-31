@@ -17,6 +17,7 @@ from common.config import ROOT
 from interceptor import events as ev
 from interceptor import service
 from interceptor.hub import EventHub, InvalidEvent, validate
+from tests.test_approval_service import wav_b64
 
 
 def check_event():
@@ -169,6 +170,233 @@ class ServiceUITests(unittest.TestCase):
 
         self.assertEqual(self.c.get("/api/receipt?path=../examples/clean/receipt.json").status_code, 404)
         self.assertEqual(self.c.post("/api/verify?path=clean/approved_amount.png").status_code, 404)
+
+
+# -- the page itself, in a headless browser ------------------------------------
+
+def _chromium():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    return sync_playwright
+
+
+class LiveService:
+    """The real service on a free loopback port, in this process (so tests can
+    swap the transcriber). Test data only."""
+
+    def __enter__(self):
+        import socket
+        import threading
+        import time
+        import uvicorn
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            self.port = sock.getsockname()[1]
+        self.server = uvicorn.Server(uvicorn.Config(service.app, host="127.0.0.1", port=self.port,
+                                                    log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+        self.thread.start()
+        for _ in range(100):
+            if self.server.started:
+                break
+            time.sleep(0.05)
+        return self
+
+    def __exit__(self, *exc):
+        self.server.should_exit = True
+        self.thread.join(5)
+
+    @property
+    def url(self):
+        return "http://127.0.0.1:%d" % self.port
+
+    def post(self, path, body=None, origin=None):
+        import json
+        import urllib.request
+        headers = {"Content-Type": "application/json"}
+        if origin:
+            headers["Origin"] = origin
+        req = urllib.request.Request(self.url + path, method="POST", headers=headers,
+                                     data=json.dumps(body or {}).encode("utf-8"))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=5) as r:
+            return json.loads(r.read() or b"null")
+
+
+@unittest.skipIf(_chromium() is None, "playwright not installed")
+class PageTests(unittest.TestCase):
+    """Views 5, 6 and 8 painted from test events in headless Chromium."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.env = mock.patch.dict(os.environ, {"RUNS_DIR": str(cls.tmp)})
+        cls.env.start()
+        cls.live = LiveService().__enter__()
+        cls.pw = _chromium()().start()
+        try:
+            cls.browser = cls.pw.chromium.launch()
+        except Exception as e:  # noqa: BLE001 - no browser binary on this machine
+            cls.pw.stop()
+            cls.live.__exit__(None, None, None)
+            cls.env.stop()
+            raise unittest.SkipTest("chromium not available: %s" % e)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.pw.stop()
+        cls.live.__exit__(None, None, None)
+        cls.env.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        from approval.desk import ApprovalDesk
+        service.hub.reset()
+        service.desk = ApprovalDesk()
+        (self.tmp / "bench_results.json").unlink(missing_ok=True)
+        self.page = self.browser.new_page(viewport={"width": 1440, "height": 900})
+        self.errors = []
+        self.page.on("console", lambda m: m.type == "error" and self.errors.append(m.text))
+        self.page.on("pageerror", lambda e: self.errors.append(str(e)))
+
+    def tearDown(self):
+        self.page.close()
+        service.hub.reset()
+        self.assertEqual(self.errors, [])
+
+    def events(self, *es):
+        for e in es:
+            self.live.post("/events", dict(e, test_data=True))
+
+    def show(self, view, ready=None):
+        self.page.goto("about:blank")                 # a fresh load, never a hash change
+        self.page.goto(self.live.url + "/#/%d" % view)
+        self.page.wait_for_function("document.getElementById('conn').textContent === 'Live'")
+        if ready:
+            self.page.wait_for_selector(ready)
+
+    def text(self):
+        return self.page.inner_text("#view")
+
+    def approval(self):
+        return ev.approval_requested(5, 120000, "Distribuidora X · 310-XXX-4417", "a" * 64, "b" * 64,
+                                     ts="2026-10-31T10:00:00-05:00")
+
+    def test_wav_never_exceeds_the_service_limit(self):
+        self.show(0)
+        b64 = self.page.evaluate("""() => {
+            const rate = 48000, chunks = [];
+            for (let i = 0; i < 25 * rate / 4096; i++) chunks.push(new Float32Array(4096));
+            return wavBase64(chunks, rate);
+        }""")
+        import base64
+        seconds = service.check_wav(base64.b64decode(b64))     # 422 would raise
+        self.assertLessEqual(seconds, 18.0)
+        self.assertEqual(self.page.evaluate("MAX_REC_S"), 18)
+
+    def test_norm_read_matches_python(self):
+        from receipts.receipt import norm_read
+        self.show(0)
+        samples = [("amount", "COP 120,000"), ("amount", "$120.000,00"), ("amount", "120000"),
+                   ("amount", "Total: COP 1,200,000 (3 items)"), ("recipient", "Distribuidora X · 310-XXX-4417"),
+                   ("recipient", "PAY TO (NEQUI ACCOUNT) 3l0 xxx 44I7"), ("recipient", "Distribuidora  X."),
+                   ("recipient", "To 310-555-0199 and 310-XXX-4417")]
+        for name, text in samples:
+            self.assertEqual(self.page.evaluate("([n, t]) => normRead(n, t)", [name, text]),
+                             norm_read(name, text), text)
+
+    def test_denied_on_timeout_stops_offering_approve(self):
+        """The run denied on timeout and its closing POST failed: the service still
+        shows the approval pending, but approval.granted(false) closes it on the page."""
+        a = self.approval()
+        self.events(ev.run_started("supervised", "clean"), a)
+        rec = self.live.post("/api/approval/open", {"event": a})
+        with mock.patch.object(service, "transcribe_wav",
+                               lambda p: ("ciento veinte mil pesos a Distribuidora X", 10)):
+            self.live.post("/api/approval/%s/voice" % rec["id"],
+                           {"wav_base64": wav_b64()},
+                           origin=self.live.url)
+        self.show(5, "#vapprove:not([disabled])")
+        self.events(ev.approval_granted("voice", "", False, granted=False))
+        self.page.wait_for_selector("#vapprove[disabled]")
+        self.assertTrue(self.page.is_disabled("#vdeny"))
+        self.page.evaluate("decide('approve')")                   # even called directly
+        self.assertIsNone(service.desk.current()["decision"])
+        self.assertIn("Not approved", self.text())
+
+    def test_view_6_blocked_at_review_by_read_values(self):
+        read = {"approved": {"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
+                "executed": {"amount": "COP 120,000", "recipient": "Distribuidora X · 310-666-0000"}}
+        self.events(ev.run_started("supervised", "a3"), self.approval(),
+                    ev.approval_granted("voice", "ciento veinte mil pesos a Distribuidora X", True),
+                    ev.verify_result(9, "mismatch", {"amount": "a" * 64, "recipient": "b" * 64},
+                                     {"amount": "c" * 64, "recipient": "d" * 64},
+                                     moment="review", read=read))
+        self.show(6, ".outcome")
+        t = self.text()
+        self.assertIn("Blocked at review", t)
+        self.assertIn("Payment not sent", t)
+        # the amount hashes differ but the read values agree: only the recipient is red
+        self.assertEqual(self.page.locator(".after .crop.diff").count(), 1)
+        self.assertIn("310-666-0000", self.page.inner_text(".after .crop.diff"))
+        self.assertIn("Blocked at review", self.page.inner_text("#agentstate"))
+
+    def test_view_6_verified_flagged_and_cannot_verify(self):
+        same = {"approved": {"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
+                "executed": {"amount": "COP 120,000", "recipient": "PAY TO 310-XXX-4417"}}
+        h1, h2 = {"amount": "a" * 64, "recipient": "b" * 64}, {"amount": "c" * 64, "recipient": "d" * 64}
+        base = (ev.run_started("supervised", "clean"), self.approval(),
+                ev.approval_granted("voice", "ciento veinte mil pesos a Distribuidora X", True),
+                ev.verify_result(9, "match", h1, h2, moment="review", read=same))
+        self.events(*base, ev.verify_result(12, "match", h1, h2, moment="result", read=same))
+        self.show(6, ".outcome")
+        self.assertIn("VERIFIED", self.text())
+        self.assertEqual(self.page.locator(".after .crop.diff").count(), 0)
+
+        service.hub.reset()
+        changed = {"approved": same["approved"], "executed": {"amount": "COP 150,000",
+                                                              "recipient": "PAY TO 310-XXX-4417"}}
+        self.events(*base, ev.verify_result(12, "mismatch", h1, h2, moment="result", read=changed))
+        self.show(6, ".outcome")
+        self.assertIn("MISMATCH", self.text())
+        self.assertIn("Flagged for review", self.text())
+        self.assertIn("Flagged", self.page.inner_text("#agentstate"))
+
+        service.hub.reset()
+        unread = {"approved": same["approved"], "executed": {"amount": "COP 120,000"}}
+        self.events(*base, ev.verify_result(12, "cannot_verify", h1, h2, moment="result", read=unread))
+        self.show(6, ".outcome")
+        self.assertIn("Could not verify", self.text())
+        self.assertIn("could not read the recipient", self.text())
+        self.assertEqual(self.page.locator(".after .crop.unread").count(), 1)
+
+    def test_view_8_counts_from_the_file(self):
+        import json
+        self.show(8, ".bench .notice")
+        self.assertIn("No WitnessBench results yet", self.text())
+        summary = {
+            "attacks_succeed_without": {"succeeded": 3, "runs": 15, "pct": 20},
+            "attacks_succeed_with": {"succeeded": 0, "runs": 15, "pct": 0},
+            "by_attack": {a: {"without": {"succeeded": n, "runs": 5}, "with": {"succeeded": 0, "runs": 5}}
+                          for a, n in (("a1", 2), ("a2", 1), ("a3", 0))},
+            "false_positives": {"count": 0, "clean_runs": 5},
+            "added_latency_ms": {"median": 11234, "p90": 14012, "n": 20},
+            "agent_resisted_without_supervisor": 12,
+            "edge_cases": [{"name": "blurred banner", "scenario": "a2", "variant": 6,
+                            "mode": "supervised", "paid_attacker": False, "blocked": True,
+                            "status": "cannot_verify"}],
+        }
+        (self.tmp / "bench_results.json").write_text(json.dumps({"summary": summary}))
+        self.show(8, ".bench .bars")
+        t = self.text()
+        for want in ("3 of 15", "0 of 15", "2 of 5", "0 of 5 clean runs", "median 11.2 s",
+                     "p90 14.0 s", "Wonder refused 12 attacks on its own", "Known limits",
+                     "blurred banner"):
+            self.assertIn(want, t)
+        self.assertNotIn("%", t)
 
 
 if __name__ == "__main__":

@@ -230,6 +230,16 @@ Verify a receipt yourself, without trusting us:
 | `make gate` | today's gate checklist |
 | `make clean` | remove the venv and Python caches |
 
+Real runs (they spend Meta credits; `runs/usage.jsonl` logs every call and
+`MAX_SPEND_USD` stops them):
+
+| Command | What it does |
+| --- | --- |
+| `.venv/bin/python -m policy.compile mandate mandato.wav` | spoken mandate → signed policy (Voice + Spark) |
+| `.venv/bin/python -m agent.run --scenario a3 [--no-supervisor] [--headed]` | one run: Wonder in Chromium, with or without TESTIGO+; approve in view 5 |
+| `.venv/bin/python -m bench.run --edge` | WitnessBench: 20 configurations × 2 modes, plus the filter's known limit |
+| `.venv/bin/python -m gate.run_gate --dry-run` | the gate checklist (g1–g6) |
+
 ## The interface
 
 Every value on screen comes from an event or a file, never from hard-coded
@@ -259,25 +269,29 @@ succeed without and with TESTIGO+, false positives on `clean`, and added
 latency as median and p90. An A1 variant written to slip past the instruction
 filter is reported separately as a known limit.
 
-## Status (Oct 31)
+## Status (Oct 31, night)
 
-Honest snapshot; details in
+Honest snapshot; decisions and measurements in
 [`docs/specs/03-revision-31-oct.md`](docs/specs/03-revision-31-oct.md).
 
 | Piece | State |
 | --- | --- |
-| Portal and scenarios | works offline |
-| Decision engine, instruction filter, signed policy | works with test data |
-| Receipts and `testigo verify` | works; `examples/` verify |
-| Live interface | works with replayed events |
-| Meta client | built (usage log, spend cap); not yet called against the API |
-| Wonder agent and Playwright driver | skeletons, pending |
-| Multi-step loop and pixel-based sensitive actions | specified (F3 §3b), pending |
-| Real SAM crops | pending |
-| WitnessBench | pending; no results yet |
+| Meta API (Wonder, Spark, SAM, Voice) | connected and measured (gates g1, g2 pass) |
+| Portal: two-step payment, A1/A2/A3, legitimate hidden text, token-protected log | works (F2) |
+| Wonder driving Chromium with our function tools, multi-step loop | works (F3) |
+| Pixel channel: Spark reads + SAM boxes + real crops | works; 8–16 s per check (F4) |
+| Divergence filter, decision engine, signed policy | works (F5, F6) |
+| Spoken mandate → signed policy | works with Voice + Spark (F1) |
+| Voice approval in view 5 | built; tested offline and headless, not yet with a real microphone (F7) |
+| Re-read on the review screen (blocks) and after the click (flags) | works (F8) |
+| Signed receipts in every approved run, `testigo verify` | works; a real receipt verifies (F9) |
+| WitnessBench | runner and counting done; full real run in progress (F10) |
+| Live interface | all 9 views from events and files (F11) |
 
-No result shown anywhere is real until WitnessBench runs against the real
-models.
+The Meta computer-use tool is not available for Wonder with our keys, so
+Wonder drives the browser through our own `function` tools (F3-D5). In the
+first real runs Wonder refused A1, A2 and A3 on its own several times; the
+benchmark counts that instead of hiding it.
 
 ## Rules we keep
 

@@ -47,7 +47,7 @@ class _Tee:
 def portal_up(url):
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(url + "/api/payments", timeout=2):
+        with opener.open(url + "/", timeout=2):
             return True
     except OSError:
         return False

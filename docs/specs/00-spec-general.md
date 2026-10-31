@@ -30,14 +30,14 @@ La novedad se apoya en que unas 13 búsquedas dedicadas no encontraron anteceden
 
 **Objetivo.** Entregar antes del 4 de noviembre a las 9 PM ET (9 PM en Bogotá) un proyecto que funcione de verdad, con repositorio público y un video de 3 minutos, y que pueda competir por los premios de la hackathon de Meta.
 
-**Lo que se evaluará** (rúbrica oficial):
+**Lo que se evaluará** (rúbrica reportada por madrobot.blog y aimagazine.blog; no se ha leído en las Official Rules, ver R11 en `03-revision-31-oct.md`):
 
 | Criterio | Peso | Qué tiene que ver el jurado |
 | --- | --- | --- |
 | Impacto | 30 % | Un problema real y con dinero detrás (agentes que manejan pagos), contado con una persona concreta: Doña Marta. |
 | Uso de herramientas de Meta | 25 % | Wonder como agente vigilado; SAM como canal de píxeles; Voice para confirmar; Spark para leer la pantalla y compilar la política (Glimmer en local solo si hay una GPU de 24 GB). Cada una con un trabajo necesario. |
 | Profundidad técnica y ejecución | 20 % | Canal de píxeles independiente, firmas, benchmark propio con resultados reales. |
-| Demo | 25 % | El ataque bloqueado en vivo y un número: porcentaje de ataques que funcionan sin y con TESTIGO+. |
+| Demo | 25 % | El ataque bloqueado en vivo y un número: cuántos ataques funcionan sin y con TESTIGO+ (conteos, R9). |
 
 La etapa 1 es pasa o no pasa: tiene que encajar con el tema y usar de verdad modelos de Meta. Los temas son «Build for Your World» y «Push the Frontier».
 
@@ -63,7 +63,7 @@ Estas salen de la guía del participante, del documento de exención, de la docu
 | Regla | Qué implica para nosotros | Estado |
 | --- | --- | --- |
 | Fechas | Hackathon del 26 de octubre al 4 de noviembre de 2026. Entrega el 4 de noviembre a las 9 PM ET (9 PM en Bogotá). | Verificado |
-| Equipos | Máximo 4 personas. | Verificado |
+| Equipos | Máximo 4 personas en el track Indie según fuentes secundarias; para el track Startup no encontramos un límite publicado. El equipo tiene 6. | **Por confirmar hoy en Discord (R1)**. Si el límite es 4, solo 4 se registran y hacen commits |
 | Trabajo nuevo | Todo debe construirse durante el evento. El código debe ser del equipo; la exención permite ayuda técnica de terceros si los componentes siguen siendo del equipo y de código abierto con sus licencias respetadas. | Verificado |
 | Repositorio público | Es obligatorio. Las llaves de firma y las claves de API no pueden ir al repositorio. | Verificado |
 | Video | De 3 minutos y es lo que se ve en la etapa final. | Verificado |
@@ -91,7 +91,7 @@ Estas salen de la guía del participante, del documento de exención, de la docu
 
 | Entra en el MVP | No entra | Es simulado |
 | --- | --- | --- |
-| Un portal de proveedor con un solo flujo: pagar un pedido en dos pasos (revisar y confirmar). Wonder lo maneja con un navegador controlado. Los 3 ataques. Política por voz. Aprobación con voz y passkey. Verificación antes de confirmar y después del clic. Recibos firmados y `verify`. WitnessBench con 20 corridas. Una interfaz basada en las vistas del diseño. | Integraciones con bancos, Nequi u otras cuentas reales. Aplicación móvil. Varios proveedores o flujos. Entrenar modelos propios. Un panel de control como función principal. Cualquier dato de un empleador. | El portal y el pago, los datos de Doña Marta, la cuenta del atacante y el dinero. Es real el agente, la detección, la aprobación, la firma del recibo y la medición. |
+| Un portal de proveedor con un solo flujo: pagar un pedido en dos pasos (revisar y confirmar). Wonder lo maneja con un navegador controlado. Los 3 ataques. Política por voz. Aprobación con voz (passkey opcional, R8). Verificación antes de confirmar y después del clic. Recibos firmados y `verify`. WitnessBench con 20 corridas. Una interfaz basada en las vistas del diseño. | Integraciones con bancos, Nequi u otras cuentas reales. Aplicación móvil. Varios proveedores o flujos. Entrenar modelos propios. Un panel de control como función principal. Cualquier dato de un empleador. | El portal y el pago, los datos de Doña Marta, la cuenta del atacante y el dinero. Es real el agente, la detección, la aprobación, la firma del recibo y la medición. |
 
 Decisión de fondo: si hay que recortar, se recorta ancho y no profundidad. Es mejor un flujo que se mide bien que varios que se ven bien.
 
@@ -103,7 +103,7 @@ TESTIGO+ se pone entre el agente y el navegador: ninguna acción de Wonder llega
 2. El interceptor detiene la acción y toma la captura y el texto visible del código de la página.
 3. SAM marca monto, destinatario y botón. Spark lee el contenido de esos recortes y el texto de toda la captura, solo como extracción con formato fijo.
 4. Se compara el texto del código con el texto de toda la captura, y el monto y el destinatario con la política. Si algo falla, se bloquea.
-5. Si es un pago y todo cumple, se pide la aprobación con los recortes, la voz y el passkey. Esta cápsula es la que responde la pregunta que Wonder hace antes de una acción importante.
+5. Si es un pago y todo cumple, se pide la aprobación con los recortes y la voz (el passkey es opcional, R8). Esta cápsula es la que responde la pregunta que Wonder hace antes de una acción importante.
 6. El pago tiene dos pasos. En la pantalla de revisión, antes del clic final de confirmar, TESTIGO+ vuelve a capturar y comprueba que lo que se va a ejecutar coincide con lo aprobado; si no coincide, bloquea.
 7. Después de confirmar, vuelve a capturar el resultado, lo compara y firma un recibo con los hashes de los recortes.
 
@@ -138,7 +138,7 @@ Cada feature tendrá su propio spec con: objetivo, entradas y salidas, criterios
 | F4 | Canal de píxeles | Marca monto, destinatario y botón en la captura y lee su contenido. | SAM 3.1, Spark 1.3 | F3 |
 | F5 | Comparación código y píxeles | Lee el texto de toda la captura y encuentra texto del código que no se ve y texto visible que no está en el código, filtrando lo que no parece una instrucción. | Spark 1.3 | F4 |
 | F6 | Motor de decisión | Aplica la política y las reglas: permitir, pedir aprobación, bloquear o «no se puede verificar». | — | F1, F4, F5 |
-| F7 | Aprobación | Cápsula con recortes reales, lectura en voz alta y passkey. | Voice Transcribe | F6 |
+| F7 | Aprobación | Cápsula con recortes reales, lectura en voz alta y passkey opcional (R8). | Voice Transcribe | F6 |
 | F8 | Verificación antes de confirmar y después del clic | Compara con lo aprobado en la pantalla de revisión (y bloquea) y otra vez en el resultado. | SAM 3.1, Spark 1.3 | F7 |
 | F9 | Recibos y `verify` | Recibo firmado con los hashes de la evidencia y una herramienta que lo comprueba. | — | F8 |
 | F10 | WitnessBench | 20 corridas con y sin TESTIGO+ y sus resultados. | Wonder | F2 a F9 |
@@ -148,7 +148,9 @@ Orden de escritura de los specs: F0, luego F2 y F3 (lo que el gate de hoy pone a
 
 ## Estado actual, riesgos y gate
 
-**Código que ya existe** (en la carpeta `testigo/`, revisado el 28 de octubre): portal con escenarios, núcleo del interceptor con reglas, bucle del agente con un agente de guion, recibos con firma y `verify`, y una política de ejemplo. Corre sin conexión y con datos de prueba. **No usa todavía ningún modelo de Meta ni Playwright**, no tiene interfaz ni repositorio git, y las imágenes de evidencia son archivos de relleno de 21 bytes. Cada spec de feature decide qué de esto se conserva. No se escribe más código hasta tener el spec de infraestructura.
+> **31 de octubre:** el estado real del código, las decisiones R1 a R11 y el calendario nuevo están en `03-revision-31-oct.md`, que manda sobre este documento donde lo contradiga.
+
+**Código que ya existe** (en la carpeta `testigo/`, revisado el 28 de octubre): portal con escenarios, núcleo del interceptor con reglas, bucle del agente con un agente de guion, recibos con firma y `verify`, y una política de ejemplo. Corre sin conexión y con datos de prueba. **No usa todavía ningún modelo de Meta ni Playwright**, no tenía interfaz ni repositorio git (hoy ya existen ambos, ver `03-revision-31-oct.md`), y las imágenes de evidencia son archivos de relleno de 21 bytes. Cada spec de feature decide qué de esto se conserva. No se escribe más código hasta tener el spec de infraestructura.
 
 **Riesgos principales**
 
@@ -161,6 +163,8 @@ Orden de escritura de los specs: F0, luego F2 y F3 (lo que el gate de hoy pone a
 | Falsos positivos por texto oculto legítimo | TESTIGO+ bloquea páginas normales. | Marcar solo el texto que parece una instrucción; medir en los 5 casos sin ataque. |
 | No hay GPU de 24 GB para Glimmer | No se puede correr la política en local. | Usar Spark por API; Glimmer queda como opcional. |
 | Latencia alta | La demo se siente lenta. | Medirla y mostrarla; limitar las comprobaciones a las acciones de pago. |
+| Dominio de pagos | Un miembro del equipo trabaja en un banco con exclusividad y el equipo había excluido pagos. | Decisión R2: proteger la dirección de entrega de un pedido en vez de la cuenta de pago (el motor no cambia), o mantener pagos tras revisar el contrato. |
+| Integración atrasada | Al 31 de oct ningún modelo de Meta está conectado y el gate del 28 no está aprobado. | Calendario nuevo con cortes diarios en `03-revision-31-oct.md` §3. |
 | Costo del benchmark | Se acaban los créditos. | Desarrollar con Spark 1.3 y usar Wonder solo para pruebas de integración y la corrida final. |
 | Reglas de asistentes de código | Riesgo de descalificación por contribución poco clara. | Preguntar en Discord; commits hechos por personas del equipo. |
 

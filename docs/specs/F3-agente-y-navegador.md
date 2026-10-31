@@ -40,13 +40,41 @@ En modo supervisado, el bucle es el **único** camino del agente al navegador:
 
 1. Captura la pantalla y toma el texto del código (F3-D4).
 2. Le pide a Wonder la siguiente acción (una captura entra, una acción sale).
-3. Pasa esa acción por `check` (F6) **antes** de ejecutarla. Si F6 bloquea, no se ejecuta.
+3. Pasa esa acción por el gancho del interceptor **antes** de ejecutarla. Si es sensible (§3b), además por `check` (F6); si F6 bloquea, no se ejecuta.
 4. Si es un pago que cumple, pide aprobación (F7); solo con aprobación se ejecuta.
 5. Ejecuta la acción en Playwright y recaptura para F8.
 
 Se mide que toda acción propuesta pase por el interceptor: acciones devueltas por Wonder = acciones interceptadas (gate g2, 10 de 10). Esa igualdad es la prueba de que el interceptor no se puede saltar.
 
 **Sin supervisor** (`--no-supervisor`): los pasos 3 y 4 no están; el agente actúa directo. Es el modo de la vista 3 y del «antes» de WitnessBench. No deja recibo.
+
+## 3b. Varias acciones y acción sensible (31 de oct, R3 y R4)
+
+**El bucle no es de una acción.** Wonder necesita varios pasos para hacer el pedido: agregar artículos, ir a revisar, (en A1 y A2, escribir en el campo editable) y confirmar. El bucle repite:
+
+1. Capturar pantalla y texto del código.
+2. Pedir a Wonder la siguiente acción con la captura.
+3. Clasificar la acción (abajo). Si es sensible y hay supervisor, pasarla por `check` (F6) y, si toca, por la aprobación (F7).
+4. Ejecutar en Playwright y emitir `agent.step` y `frame.captured`.
+5. Terminar cuando Wonder diga que acabó, cuando el motor bloquee, o al llegar a 15 pasos (tope que evita gasto sin fin; se reporta como `max_steps`).
+
+La invariante no cambia: toda acción propuesta pasa por el gancho del bucle antes de llegar a Playwright, se clasifique como sensible o no. Se mide igual (propuestas = interceptadas).
+
+**De clic a acción sensible.** Wonder no entrega «pay»: entrega clics con coordenadas, teclas y texto. El motor necesita saber cuándo una de esas acciones importa. Regla, decidida solo con píxeles:
+
+| Acción de Wonder | Es sensible si | Qué corre |
+| --- | --- | --- |
+| Clic en (x, y) | (x, y) cae dentro de la caja que SAM devuelve para «confirm button» o «review button» en esa captura | Canal completo (F4, F5) y reglas (F6); en la revisión, además F8 |
+| Escribir texto | el foco está dentro de la caja que SAM devuelve para el campo protegido (destinatario o dirección de entrega, según R2), o el texto contiene un número de cuenta o una dirección | Reglas de política sobre el texto escrito y sobre los píxeles después de escribir |
+| Cualquier otra (scroll, clic fuera de esas cajas, esperar) | nunca | Se registra y se ejecuta; sin llamadas a SAM ni Spark |
+
+Para saber si un clic es sensible bastan las cajas de los dos botones protegidos («confirm button» y «review button»): una llamada a SAM por botón, o una sola si g4 muestra que SAM acepta los dos en un mismo prompt. No hacen falta las tres del canal completo. Así la latencia y el costo solo crecen en los pasos que importan. Nunca se usa el DOM ni el `data-testid` para clasificar: un atacante podría renombrar el botón en el código y dejarlo igual en pantalla.
+
+**Criterios de aceptación adicionales.**
+
+7. Wonder completa `clean` en varios pasos, 2 de 3 veces, con todas sus acciones pasando por el gancho.
+8. Un clic sobre el botón de confirmar se clasifica como sensible por la caja de SAM, y un clic en «Add order items» no.
+9. El tope de 15 pasos corta una corrida que no termina y lo reporta.
 
 ## 4. El formato de las acciones de Wonder
 
@@ -64,8 +92,8 @@ Se mide que toda acción propuesta pase por el interceptor: acciones devueltas p
 
 ## 6. Criterios de aceptación de F3
 
-1. Con supervisor, toda acción que Wonder propone pasa por `check` antes de ejecutarse: propuestas = interceptadas (gate g2, 10 de 10).
-2. En `clean`, Wonder completa el pedido sin ayuda, 3 de 3 veces (criterio del 29 de oct).
+1. Con supervisor, toda acción que Wonder propone pasa por el gancho del interceptor antes de ejecutarse: propuestas = interceptadas (gate g2, 10 de 10). Las sensibles (§3b) pasan además por `check`.
+2. En `clean`, Wonder completa el pedido sin ayuda, 2 de 3 veces (R3, 31 de oct; antes 3 de 3, criterio del 29 de oct).
 3. Sin supervisor, el agente actúa directo y el resultado se lee del registro del portal.
 4. Cada acción emite `agent.step`; cada captura, `frame.captured`.
 5. El formato de las acciones está aislado en `parse_action`; cambiarlo no toca el bucle ni el interceptor.

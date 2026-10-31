@@ -7,6 +7,7 @@ Documentos de diseño del proyecto. Se escriben antes del código y el código l
 | `00-spec-general.md` | Qué es TESTIGO+, objetivo, reglas de Meta, alcance, arquitectura, features (F0 a F11), riesgos y gate. Es la base de todos los demás. |
 | `01-spec-construccion.md` | Correcciones a las maquetas, piezas del sistema, portal simulado y ataques, vistas reales, formatos y orden de construcción. |
 | `02-spec-vistas-maquetas.md` | Spec de las 8 vistas y la portada usadas para las maquetas en Claude Design. |
+| `03-revision-31-oct.md` | Revisión del 31 de oct: estado real del código, decisiones R1 a R11, calendario nuevo hasta el 4 de nov, infraestructura y stack. **Manda sobre los demás donde los contradiga.** |
 
 Specs de cada feature (objetivo, entradas y salidas, criterios de aceptación, qué se prueba con modelos reales y qué con datos de prueba, y qué del código actual se conserva):
 

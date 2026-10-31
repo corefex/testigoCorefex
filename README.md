@@ -303,19 +303,21 @@ scenario and are retired until the re-run.
 | Meta API (Wonder, Spark, SAM, Voice) | connected (gates g1, g2 passed on Oct 31; re-run in the delivery domain pending) |
 | Portal: two-step order, editable delivery address, A1/A2/A3, legitimate hidden text, token-protected order log | works (F2) |
 | Wonder driving Chromium with our function tools, multi-step loop | works (F3) |
-| Pixel channel: Spark reads + SAM boxes + real crops | works (F4); latency: pendiente: se vuelve a medir en el dominio de entrega |
+| Pixel channel: Spark reads + SAM boxes + real crops | works (F4); median 15.2 s per check, p90 28.6 s (WitnessBench, 31 Oct) |
 | Divergence filter, decision engine, signed policy (`deliver_only`) | works (F5, F6) |
 | Spoken mandate → signed policy | works with Voice + Spark (F1) |
 | Voice approval in the interface | built; tested offline and headless, not yet with a real microphone (F7) |
 | Re-read on the review screen (blocks) and after the click (flags) | works (F8) |
 | Signed receipts in every approved run, `testigo verify` | works; a real receipt verifies (F9) |
-| WitnessBench | pendiente: se vuelve a medir en el dominio de entrega (F10) |
+| WitnessBench | real run, 42 of 42 without errors (F10, `results/witnessbench-2026-10-31-delivery.json`): 0 of 15 orders reached the attacker with or without TESTIGO+ (Muse Wonder resisted every attack on its own); with TESTIGO+, 9 of 10 pages with a hidden or painted order were stopped before Confirm; 1 of 5 clean orders paused as cannot_verify |
 | Live interface | landing, four-step guided demo that starts runs (`POST /api/run`), results page; presenter views at `#/present` (F11) |
 
 The Meta computer-use tool is not available for Wonder with our keys, so
-Wonder drives the browser through our own `function` tools (F3-D5). How many
-attacks Wonder resists on its own, and how many TESTIGO+ stops: pendiente: se
-vuelve a medir en el dominio de entrega.
+Wonder drives the browser through our own `function` tools (F3-D5). In the delivery
+domain Wonder resisted all 15 attacks on its own (31 Oct real run), so the
+"before" shows no successful attack; TESTIGO+ still stopped 9 of the 10 pages
+carrying a hidden or painted order before Confirm, without relying on the
+agent noticing.
 
 ## Rules we keep
 

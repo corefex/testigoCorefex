@@ -28,14 +28,14 @@ dev = ["pytest", "httpx"]
 testigo = "receipts.cli:main"
 
 [tool.setuptools]
-packages = ["common", "portal", "agent", "interceptor", "receipts", "policy", "approval", "gate", "scripts"]
+packages = ["common", "portal", "agent", "interceptor", "receipts", "policy", "approval", "gate", "scripts", "bench"]
 
 [tool.setuptools.package-data]
 portal = ["static/*.png"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests", "common", "portal", "interceptor", "agent", "receipts", "approval", "policy"]
+testpaths = ["tests", "common", "portal", "interceptor", "agent", "receipts", "approval", "policy", "bench"]
 python_files = ["test_*.py"]
 addopts = "-m 'not live'"
 markers = [

@@ -15,6 +15,15 @@ Routes
   GET  /api/bench    runs/bench_results.json, or "not available" (view 8)
   GET  /runs/<path>  screenshots and crops (PNG/JPEG only) from runs/
 
+Approval (F7, view 5; see approval/desk.py)
+  POST /api/approval/open           the loop opens one approval (no browser Origin)
+  GET  /api/approval                the open approval, for the page
+  GET  /api/approval/<id>           one approval, polled by the loop
+  POST /api/approval/<id>/voice     a WAV of the person reading aloud (base64 in
+                                    JSON) -> Voice Transcribe -> match vs pixels
+  POST /api/approval/<id>/decision  {"decision": "approve"|"deny"}; approve only
+                                    after a voice that matched
+
 The interface decides nothing and keeps nothing (F11-D4): it shows events and
 files. runs/ is git-ignored, so captures exist only on the demo machine.
 
@@ -23,14 +32,22 @@ carry a local Host (stops DNS rebinding). Any browser request that sends an
 Origin must come from this service's own origin, which keeps other tabs (the
 portal included) from injecting events, wiping a run or reading the stream.
 Writes also require a JSON body, which makes a cross-site form or no-cors
-fetch impossible.
+fetch impossible. The approval endpoints are loopback only and size-limited;
+the voice endpoint takes the audio itself (never a file path), checks it is a
+short mono PCM WAV, and writes it only to a temporary file that is deleted
+after the transcription.
 """
 
 import asyncio
+import base64
+import binascii
 import html
+import io
 import json
 import subprocess
 import sys
+import tempfile
+import wave
 from pathlib import Path
 
 from urllib.parse import urlsplit
@@ -38,9 +55,11 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
+from approval.desk import ApprovalDesk, DeskError
 from common import clock, config
-from interceptor.hub import PAGE_QUEUE, EventHub, InvalidEvent
+from interceptor.hub import PAGE_QUEUE, EventHub, InvalidEvent, validate
 from interceptor.policy import load as load_policy
 
 UI_DIR = config.ROOT / "ui"
@@ -48,9 +67,14 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testserver"}
 VERIFY_TIMEOUT_S = 20
+MAX_JSON_BYTES = 64_000            # an approval or a decision is a small object
+MAX_VOICE_BYTES = 1_500_000        # base64 of ~20 s of 16 kHz mono 16-bit PCM
+MAX_VOICE_SECONDS = 20
+MIN_VOICE_SECONDS = 0.3
 
 app = FastAPI(title="TESTIGO+ interceptor", docs_url=None, redoc_url=None)
 hub = EventHub()
+desk = ApprovalDesk()
 
 
 def _hostname(netloc):
@@ -230,6 +254,141 @@ async def ws(websocket: WebSocket):
         for t in (recv, get):
             if t is not None and not t.done():
                 t.cancel()
+
+
+# -- approval (F7) ------------------------------------------------------------
+
+def transcribe_wav(path):
+    """Voice Transcribe on a WAV file (the real model). Returns (text, latency_ms).
+    Tests replace this function; they never call the Meta API."""
+    from common.meta_client import MetaClient
+    text, ms, _seconds = MetaClient().transcribe(path)
+    return text, ms
+
+
+async def json_body(request, limit):
+    """A JSON object body of at most `limit` bytes, read without trusting
+    Content-Length."""
+    if request.headers.get("content-type", "").split(";")[0].strip() != "application/json":
+        raise HTTPException(415, "send application/json")
+    try:
+        if int(request.headers.get("content-length") or 0) > limit:
+            raise HTTPException(413, "body too large")
+    except ValueError:
+        raise HTTPException(400, "bad content-length")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise HTTPException(413, "body too large")
+    try:
+        data = json.loads(bytes(body))
+    except ValueError:
+        raise HTTPException(422, "body is not valid JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(422, "body must be a JSON object")
+    return data
+
+
+def _desk(fn, *args):
+    try:
+        return fn(*args)
+    except DeskError as e:
+        raise HTTPException(e.status, e.detail)
+
+
+def crop_images(images):
+    """{"amount"|"recipient": path under runs/} — PNG files that exist."""
+    if images is None:
+        return {}
+    if not isinstance(images, dict) or set(images) - {"amount", "recipient"}:
+        raise HTTPException(422, "images: only amount and recipient")
+    out = {}
+    for label, rel in images.items():
+        if not isinstance(rel, str) or not rel.lower().endswith(".png"):
+            raise HTTPException(422, "images.%s must be a .png path under runs/" % label)
+        p = under(runs_dir(), rel)
+        if not p.is_file():
+            raise HTTPException(422, "images.%s not found under runs/" % label)
+        out[label] = p.relative_to(runs_dir()).as_posix()
+    return out
+
+
+def check_wav(data):
+    """A short mono 16-bit PCM WAV, or 422. Returns its duration in seconds."""
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            ch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+    except (wave.Error, EOFError):
+        raise HTTPException(422, "audio must be a PCM WAV")
+    if ch != 1 or width != 2 or not 8000 <= rate <= 48000:
+        raise HTTPException(422, "audio must be mono 16-bit PCM, 8-48 kHz")
+    seconds = n / float(rate)
+    if not MIN_VOICE_SECONDS <= seconds <= MAX_VOICE_SECONDS:
+        raise HTTPException(422, "audio must last %.1f-%d s" % (MIN_VOICE_SECONDS, MAX_VOICE_SECONDS))
+    return seconds
+
+
+@app.post("/api/approval/open")
+async def approval_open(request: Request):
+    """The loop's ServiceApprover. A browser page (which always sends an
+    Origin on a POST) cannot open an approval."""
+    local_only(request)
+    if request.headers.get("origin") is not None:
+        raise HTTPException(403, "only the loop opens an approval")
+    body = await json_body(request, MAX_JSON_BYTES)
+    event = body.get("event")
+    try:
+        validate(event)
+    except InvalidEvent as e:
+        raise HTTPException(422, str(e))
+    if event["type"] != "approval.requested":
+        raise HTTPException(422, "event must be an approval.requested event")
+    return _desk(desk.open, event, crop_images(body.get("images")))
+
+
+@app.get("/api/approval")
+def approval_current(request: Request):
+    local_only(request)
+    return {"approval": desk.current()}
+
+
+@app.get("/api/approval/{approval_id}")
+def approval_get(approval_id: str, request: Request):
+    local_only(request)
+    return _desk(desk.get, approval_id)
+
+
+@app.post("/api/approval/{approval_id}/voice")
+async def approval_voice(approval_id: str, request: Request):
+    local_only(request)
+    body = await json_body(request, MAX_VOICE_BYTES)
+    b64 = body.get("wav_base64")
+    if not isinstance(b64, str) or not b64:
+        raise HTTPException(422, "wav_base64 (the audio, base64) is required")
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "wav_base64 is not valid base64")
+    check_wav(data)
+    _desk(desk.start_voice, approval_id)
+    with tempfile.TemporaryDirectory(prefix="testigo-voice-") as tmp:
+        path = Path(tmp) / "voice.wav"
+        path.write_bytes(data)
+        try:
+            text, ms = await run_in_threadpool(transcribe_wav, path)
+        except Exception as e:  # noqa: BLE001 - say so on the page; nothing is approved
+            raise HTTPException(502, "Voice Transcribe failed: %s" % type(e).__name__)
+    return _desk(desk.record_voice, approval_id, text, ms)
+
+
+@app.post("/api/approval/{approval_id}/decision")
+async def approval_decision(approval_id: str, request: Request):
+    local_only(request)
+    body = await json_body(request, MAX_JSON_BYTES)
+    reason = body.get("reason", "")
+    return _desk(desk.decide, approval_id, body.get("decision"),
+                 reason if isinstance(reason, str) else "")
 
 
 # -- files the views read ---------------------------------------------------

@@ -85,3 +85,25 @@ La normalización y comparación de voz es código nuevo (propuesta: `approval/v
 1. **F4.** La comparación de voz necesita el monto y el destinatario **leídos de los píxeles**, no del DOM. F7 depende de que F4 entregue esos dos valores con su confianza.
 2. **F9.** La transcripción de la voz y el método entran en el recibo (`approval`), y los hashes de los recortes aprobados son los que F9 guarda como `approved`.
 3. **F1.** El mismo passkey que respalda la política (F1) es el mecanismo de identidad aquí. Conviene un solo registro de passkey para la demo, reutilizado en el mandato y en la aprobación.
+
+## Implementación (31 de octubre)
+
+Con R8 (`03-revision-31-oct.md`): la aprobación es **voz que coincide con los píxeles + clic en «Approve»**. El passkey queda opcional y no se usa; la cápsula lo dice: «la voz confirma la intención (qué se paga y a quién); no prueba quién eres; un passkey lo haría y es opcional (R8)». Probado offline (`tests/test_approval_service.py`, `approval/test_voice_match.py`) con un transcriptor falso; ninguna prueba llama a la API de Meta.
+
+**Flujo en una corrida real.**
+
+1. El loop emite `approval.requested` (monto y destinatario leídos de los píxeles, hashes de los recortes) y llama al aprobador. En `agent/run.py` el aprobador es `ServiceApprover` (`agent/approval.py`): abre la aprobación en el servicio (`POST /api/approval/open`, con las rutas de los PNG de los recortes si existen) y consulta cada 0,5 s hasta que la persona decide. Sin decisión en `--approval-timeout` (300 s por defecto) la niega con el motivo y la cierra en el servicio. Servicio caído, decisión de otra aprobación o «approve» sin voz que coincida = negada.
+2. Vista 5: la persona pulsa **Record** y lee el monto y el destinatario. El navegador graba con WebAudio y codifica **WAV PCM de 16 kHz, mono, 16 bits** en JS (Voice Transcribe solo acepta WAV); lo envía en base64 dentro de JSON a `POST /api/approval/<id>/voice`.
+3. El servicio valida el WAV (mono, 16 bits, 8–48 kHz, 0,3–20 s), lo escribe en un archivo temporal que borra al terminar (el audio no se guarda), llama a `MetaClient.transcribe` y compara la transcripción con `approval/voice_match.py` contra el monto y el destinatario **del evento** (píxeles, nunca el DOM). Devuelve la transcripción, si coincide, el monto oído y si se oyó el nombre.
+4. La vista muestra los estados: esperando voz, grabando, transcribiendo, **coincide** (verde, se activa «Approve»), **no coincide** (rojo, con la diferencia: «Amount heard COP 150,000 · screen COP 120,000» o «Recipient … not heard»; se puede grabar otra vez) y **aprobado** (sello con la hora). «Deny» siempre está disponible mientras la aprobación esté abierta.
+5. `POST /api/approval/<id>/decision` registra la decisión; el servicio rechaza «approve» sin una voz que coincida (409), no solo el botón. El loop emite `approval.granted` con `method: "voice"`, la transcripción real y `voice_match`.
+
+**Recortes en la cápsula.** `agent/run.py` envuelve el canal de píxeles (`CropFiles`) y guarda cada recorte en la carpeta de la corrida con su sha256 en el nombre; el aprobador manda las rutas cuyo hash es el del evento, así la vista 5 muestra exactamente los píxeles aprobados. Si faltan, la vista muestra el texto leído y el hash, como antes.
+
+**Seguridad del servicio.** Los endpoints nuevos son solo loopback, con `Host` local y mismo origen (el middleware de F11), escrituras en JSON con límite de tamaño leído del cuerpo (64 KB; 1,5 MB para la voz) y nunca reciben rutas de archivo para el audio. Solo el loop (sin `Origin`) abre una aprobación: ninguna página puede fabricar una. Máximo 5 transcripciones por aprobación (cada una es una llamada pagada).
+
+**Elegir el aprobador.** `python -m agent.run ... --approve-in interface|console`. Sin la opción: la interfaz si el servicio del interceptor responde en `/health`, la consola si no (`ConsoleApprover`, sin voz).
+
+**Ajustes a `voice_match`.** Montos escritos en cifras por el transcriptor («120.000», «120,000», «$120 000») se juntan antes de convertir; el nombre se compara palabra por palabra y una letra suelta puede decirse por su nombre («Distribuidora equis» = «Distribuidora X»).
+
+**Pendiente.** La primera prueba con micrófono y Voice Transcribe reales (fija la tolerancia del criterio, §4). En Chromium sin interfaz de este entorno `getUserMedia` no responde ni con los flags de dispositivo falso; la revisión automática de la vista 5 sustituyó el micrófono por un oscilador de WebAudio (la grabación, el WAV y el resto del flujo sí son los reales). El passkey (F7-D3, F7-D4) sigue fuera por R8. El recibo (`build_receipt` en `agent/loop.py`) aún escribe `method: "passkey"` y una transcripción fija; lo cambia F9.

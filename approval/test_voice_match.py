@@ -20,6 +20,11 @@ class SpanishNumberTests(unittest.TestCase):
         self.assertEqual(spanish_to_int("ciento veinte mil"), 120000)
         self.assertEqual(spanish_to_int("son ciento veinte mil pesos colombianos"), 120000)
 
+    def test_digits_with_thousands_separators(self):
+        # what a transcriber may write instead of words
+        for said in ("120.000 pesos", "120,000", "$120 000 pesos", "120000", "120 mil"):
+            self.assertEqual(spanish_to_int(said), 120000, said)
+
     def test_not_a_number(self):
         self.assertIsNone(spanish_to_int("Distribuidora X"))
         self.assertIsNone(spanish_to_int(""))
@@ -37,6 +42,13 @@ class MatchTests(unittest.TestCase):
     def test_recipient_matches(self):
         self.assertTrue(recipient_matches(self.GOOD, self.RECIPIENT))
         self.assertFalse(recipient_matches("ciento veinte mil pesos a otra tienda", self.RECIPIENT))
+
+    def test_recipient_letter_said_by_name(self):
+        self.assertTrue(recipient_matches("ciento veinte mil a Distribuidora equis", self.RECIPIENT))
+        self.assertTrue(recipient_matches("distribuidora, x.", self.RECIPIENT))
+        # whole words, in order: a longer name is not the same recipient
+        self.assertFalse(recipient_matches("Distribuidora Xavier", self.RECIPIENT))
+        self.assertFalse(recipient_matches("X Distribuidora", self.RECIPIENT))
 
     def test_voice_matches_both(self):
         ok, _ = voice_matches(self.GOOD, self.AMOUNT, self.RECIPIENT)

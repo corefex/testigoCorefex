@@ -1,6 +1,7 @@
 """One real run: Wonder drives the portal in Chromium, with or without TESTIGO+.
 
   .venv/bin/python -m agent.run --scenario clean [--variant 1] [--no-supervisor] [--headed]
+                                [--approve-in interface|console] [--approval-timeout 300]
 
 Uses the real Meta API (spend goes to runs/usage.jsonl). If the portal is not
 up on PORTAL_PORT, one is started in this process. Every event goes to the
@@ -10,9 +11,17 @@ runs/<date>/<run>/events.jsonl; screenshots, Wonder's raw answers and a summary
 receipt.json and evidence crops there (F9; `testigo verify` checks them).
 
 Supervised runs classify clicks with SAM (R4) and check the sensitive ones with
-the real pixel channel (F4). A payment that passes is approved by the person at
-the terminal (ConsoleApprover) until the voice capsule (F7) is wired; with no
-terminal, nobody approves and the payment does not happen.
+the real pixel channel (F4). A payment that passes needs the person (F7, R8):
+
+  --approve-in interface  view 5 of the interface (http://127.0.0.1:8090/#/5):
+                          read the amount and recipient aloud, Voice Transcribe
+                          checks it against the pixels, then click Approve.
+                          No decision within --approval-timeout -> denied.
+  --approve-in console    type "yes" in this terminal (no voice).
+
+Without the flag: the interface when the interceptor service answers, the
+console otherwise. With no terminal and no interface, nobody approves and the
+payment does not happen.
 """
 
 import argparse
@@ -22,13 +31,13 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from common import clock, config, meta_client
-from interceptor.channels import SamSparkChannel
+from interceptor.channels import SamSparkChannel, sha_crop
 from interceptor.sensitive import SamButtons
-from interceptor.sink import default_sink
+from interceptor.sink import default_sink, service_url
 
 from . import loop
 from .agent import WonderAgent
-from .approval import ConsoleApprover
+from .approval import ConsoleApprover, ServiceApprover
 from .driver import open_portal
 
 
@@ -42,6 +51,65 @@ class _Tee:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
         self.sink.publish(e)
+
+
+class CropFiles:
+    """Wraps the pixel channel and keeps each crop it cuts as a PNG in the run
+    folder, named by its sha256 — the hash approval.requested carries. The
+    capsule (view 5) then shows exactly the pixels whose hash is approved."""
+
+    def __init__(self, channel, run_dir):
+        self.channel, self.run_dir, self.by_sha = channel, run_dir, {}
+
+    def __getattr__(self, name):
+        return getattr(self.channel, name)
+
+    def read_regions(self, capture):
+        regions = self.channel.read_regions(capture)
+        for label, data in list((capture.crops or {}).items()):
+            if not data:
+                continue
+            sha = sha_crop(data)
+            p = self.run_dir / ("crop_%03d_%s_%s.png" % (capture.frame, label.replace(" ", "-"),
+                                                         sha[:12]))
+            try:
+                p.write_bytes(data)
+            except OSError:
+                continue
+            rel = _runs_relative(p)
+            if rel:
+                self.by_sha[sha] = rel
+        return regions
+
+    def images_for(self, approval_event):
+        crops = approval_event.get("crops") or {}
+        return {k: self.by_sha[v] for k, v in crops.items() if v in self.by_sha}
+
+
+def _runs_relative(p):
+    try:
+        return p.resolve().relative_to(config.settings().runs_dir.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def service_up():
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(service_url("/health"), timeout=2) as r:
+            return r.status == 200
+    except OSError:
+        return False
+
+
+def choose_approver(where, timeout_s, crops):
+    """The interface (voice + click) when asked or when the service is up;
+    the console otherwise."""
+    if where is None:
+        where = "interface" if service_up() else "console"
+    if where == "interface":
+        return ServiceApprover(service_url(), timeout_s=timeout_s, images_for=crops.images_for)
+    return ConsoleApprover()
 
 
 def portal_up(url):
@@ -70,6 +138,11 @@ def main(argv=None):
     ap.add_argument("--max-steps", type=int, default=loop.MAX_STEPS)
     ap.add_argument("--model", default="wonder", choices=("wonder", "spark"),
                     help="spark only to develop cheaply; WitnessBench and the video use wonder")
+    ap.add_argument("--approve-in", choices=("interface", "console"), default=None,
+                    help="where the person approves a payment (default: the interface if "
+                         "the interceptor service is up, else the console)")
+    ap.add_argument("--approval-timeout", type=float, default=300.0,
+                    help="seconds to wait for the person in the interface before denying")
     args = ap.parse_args(argv)
 
     s = config.settings()
@@ -83,11 +156,15 @@ def main(argv=None):
     meta = meta_client.MetaClient()
     agent = WonderAgent(meta, tool=args.model)
     spent0 = meta.spent_usd()
+    pixels = SamSparkChannel(meta)
+    crops = CropFiles(pixels, run_dir)
+    approver = choose_approver(args.approve_in, args.approval_timeout, crops)
+    print("approval: %s" % ("interface, view 5 (%s/#/5)" % service_url()
+                            if isinstance(approver, ServiceApprover) else "console"))
     try:
-        pixels = SamSparkChannel(meta)
-        with open_portal(args.scenario, args.variant, pixel_channel=pixels,
+        with open_portal(args.scenario, args.variant, pixel_channel=crops,
                          run_dir=run_dir, headless=not args.headed) as driver:
-            out = loop.run(driver, agent, supervised=supervised, approver=ConsoleApprover(),
+            out = loop.run(driver, agent, supervised=supervised, approver=approver,
                            sink=_Tee(run_dir / "events.jsonl", default_sink()),
                            sensitive=SamButtons(meta.segment, read=pixels.read_label), max_steps=args.max_steps,
                            run_dir=run_dir)

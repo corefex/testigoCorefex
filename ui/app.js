@@ -49,6 +49,8 @@ const S = {
   runs: { supervised: freshRun(), no_supervisor: freshRun() },
   view: viewFromHash(), auto: true,
   policy: null, receipt: null, receiptFor: undefined, verify: null, verifying: false, bench: null,
+  // view 5: the approval as the service holds it (/api/approval) and the microphone
+  desk: null, deskChecked: false, deskBusy: false, rec: { state: "idle", error: "" },
 };
 
 function run() { return S.runs[S.current] || S.runs.supervised; }
@@ -86,8 +88,8 @@ function apply(e, follow) {
       r.check = e;
       if (e.status !== "ok") follow(4);
       break;
-    case "approval.requested": r.approval = e; follow(5); break;
-    case "approval.granted": r.granted = e; break;
+    case "approval.requested": r.approval = e; follow(5); loadDesk(); break;
+    case "approval.granted": r.granted = e; stopRecording(true); loadDesk(); break;
     case "payment.executed":
       r.payment = e;
       if (r.mode === "no_supervisor") follow(3);
@@ -313,16 +315,64 @@ const render = {
   approve() {
     const r = S.runs.supervised, a = r.approval, g = r.granted;
     const head = `<h1 class="title">Approve what will really happen</h1>
-      <p class="lede">Exact crops of the screen — not the agent's summary.</p>`;
+      <p class="lede">Exact crops of the screen — not the agent's summary. Read them aloud, then approve.</p>`;
     if (!a) return head + empty("No approval requested", "A payment that passes every check stops here for the person.");
-    const img = a.images || {};
+    const d = deskFor(a), voice = d && d.voice;
+    const img = Object.assign({}, (d && d.images) || {}, a.images || {});
+    const rec = S.rec.state;
+    // the loop's answer when it exists; before that, the service's record
     let state = "wait";
-    if (g) state = g.voice_match ? (isGranted(g) ? "match" : "refused") : "nomatch";
-    const vchip = state === "match" ? chip("ok", ICON.check, "Matches the screen")
-      : state === "nomatch" ? chip("bad", ICON.stop, "Does not match the screen")
-      : state === "refused" ? chip("bad", ICON.stop, "Matches · passkey refused")
-      : chip("warn", ICON.pause, "Waiting for voice");
-    const approved = state === "match";
+    if (g) state = isGranted(g) ? "approved" : (g.voice_match ? "refused" : "nomatch");
+    else if (d && d.decision) state = d.decision === "approve" ? "sending" : "refused";
+    else if (voice && rec === "idle") state = voice.match ? "match" : "nomatch";   // a new take hides the old one
+    const vchip = {
+      approved: chip("ok", ICON.check, "Approved"),
+      match: chip("ok", ICON.check, "Matches the screen"),
+      sending: chip("ok", ICON.check, "Approved · sent to the run"),
+      nomatch: chip("bad", ICON.stop, "Does not match the screen"),
+      refused: chip("bad", ICON.stop, g && g.voice_match ? "Matches · not approved" : "Denied"),
+      wait: rec === "starting" ? chip("warn", ICON.mic, "Allow the microphone…")
+        : rec === "recording" ? chip("warn", ICON.mic, "Recording…")
+        : rec === "sending" ? chip("warn", ICON.pause, "Transcribing…")
+        : chip("warn", ICON.pause, "Waiting for voice"),
+    }[state];
+    const transcript = g ? g.voice_transcript : (voice && rec === "idle" ? voice.transcript : "");
+    const waitText = rec === "recording" ? "Listening… press Stop when done."
+      : rec === "sending" ? "Sending to Voice Transcribe…" : rec === "starting" ? "Waiting for the browser to hand over the microphone…"
+      : d ? "Press Record and read the amount and the recipient aloud." : "No voice yet.";
+    const heard = transcript ? `<div class="transcript">“${esc(transcript)}”</div>`
+      : `<div class="transcript wait">${esc(waitText)}</div>`;
+    let diff = "";
+    if (state === "nomatch" && !g && voice) {
+      const lines = [];
+      if (!voice.amount_match) lines.push(`Amount heard ${esc(voice.heard_amount == null ? "none" : cop(voice.heard_amount))} · screen ${esc(cop(a.amount_cop))}`);
+      if (!voice.recipient_match) lines.push(`Recipient “${esc(voice.recipient_name)}” not heard`);
+      diff = `<div class="vdiff">${lines.map(l => `<div>${ICON.stop}<span>${l}</span></div>`).join("")}</div>`;
+    }
+    const open = !g && !!d && !d.decision;      // the run is waiting for this person
+    const busy = rec !== "idle" || S.deskBusy;
+    let controls = "";
+    if (open) {
+      const recBtn = rec === "recording" || rec === "starting"
+        ? `<button class="btn rec on" id="vstop" type="button">${ICON.dot} ${rec === "starting" ? "Cancel" : "Stop"}</button>`
+        : `<button class="btn rec" id="vrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${voice ? "Record again" : "Record"}</button>`;
+      const meta = voice
+        ? `Attempt ${esc(d.attempts)} · Voice Transcribe ${esc(voice.latency_ms == null ? "—" : Math.round(voice.latency_ms) + " ms")}`
+        : "Up to 20 s · the audio is not kept";
+      controls = `<div class="vctl">${recBtn}<span class="muted small">${meta}</span></div>`;
+    } else if (!g && !d) {
+      controls = `<div class="vctl"><span class="muted small">${S.deskChecked
+        ? "This approval is not open in the interface (the run asks in its terminal, or these are test events)."
+        : "Connecting to the approval…"}</span></div>`;
+    }
+    const err = S.rec.error ? `<div class="verr">${ICON.warn}<span>${esc(S.rec.error)}</span></div>` : "";
+    const canApprove = open && voice && voice.match && !busy;
+    const done = state === "approved" || state === "sending";
+    const approveLabel = state === "approved"
+      ? ICON.check + (g.method === "passkey" ? " Approved with passkey" : " Approved · voice + click")
+      : state === "sending" ? ICON.check + " Approved · waiting for the run" : ICON.check + " Approve";
+    const why = g && !isGranted(g) && d && d.reason && sameApproval(d.event, a) ? " · " + esc(d.reason) : "";
+    const stamp = g ? `<div class="vstamp ${isGranted(g) ? "ok" : "bad"}">${isGranted(g) ? "Approved" : "Not approved"} at ${esc(time(g.ts))}${why}</div>` : "";
     return head + `<div class="capsule">
       <div class="crops">
         ${crop("Amount", img.amount, cop(a.amount_cop), a.crops.amount)}
@@ -330,12 +380,15 @@ const render = {
       </div>
       <div class="voice">
         <div class="head">${ICON.mic} Read aloud to confirm ${vchip}</div>
-        ${wave(state === "wait" ? "live" : (state === "match" ? "" : "idle"))}
-        <div class="transcript${g ? "" : " wait"}">${g ? "“" + esc(g.voice_transcript) + "”" : "Listening…"}</div>
+        ${wave(rec === "recording" ? "live" : (state === "match" || done ? "" : "idle"))}
+        ${heard}${diff}${controls}${err}
       </div>
-      <button class="passkey${approved ? " done" : ""}" ${approved ? "" : "disabled"} type="button">
-        ${approved ? ICON.check + " Approved with passkey" : ICON.finger + " Confirm with passkey"}</button>
-      <div class="fine">Your voice confirms the intent. The passkey proves it is you.</div>
+      <div class="decide">
+        <button class="passkey${done ? " done" : ""}" id="vapprove" ${canApprove ? "" : "disabled"} type="button">${approveLabel}</button>
+        <button class="btn deny" id="vdeny" ${open && !busy ? "" : "disabled"} type="button">${ICON.stop} Deny</button>
+      </div>${stamp}
+      <div class="fine">Your voice confirms the intent: what is paid and to whom, checked against the pixels.
+        It does not prove who you are; a passkey would, and it is optional (R8) and not used here.</div>
     </div>`;
   },
 
@@ -449,6 +502,7 @@ async function loadFor(i) {
   try {
     if ((key === "mandate" || key === "nosup") && !S.policy) { S.policy = await getJSON("/api/policy"); draw(); }
     if (key === "bench") { S.bench = await getJSON("/api/bench"); draw(); }
+    if (key === "approve") loadDesk();
     if (key === "receipt") {
       const ev = S.runs.supervised.receipt;
       const path = ev && ev.path ? ev.path : "";
@@ -474,6 +528,110 @@ async function runVerify() {
   S.verifying = false;
   if (seq === S.loadSeq) S.verify = got;     // only for the receipt still on screen
   draw();
+}
+
+// -- approval: voice + click (F7 with R8) ------------------------------------
+// The service holds the approval the run is waiting on; it transcribes the
+// audio and compares it with the pixels. The page only records and shows.
+function sameApproval(x, a) {
+  return !!x && !!a && x.ts === a.ts && x.amount_cop === a.amount_cop && x.recipient === a.recipient
+    && !!x.crops && x.crops.amount === a.crops.amount && x.crops.recipient === a.crops.recipient;
+}
+function deskFor(a) { return S.desk && sameApproval(S.desk.event, a) ? S.desk : null; }
+async function loadDesk() {
+  try {
+    const got = await getJSON("/api/approval");
+    S.desk = got.approval; S.deskChecked = true;
+  } catch (err) { console.error(err); }
+  draw();
+}
+// the run posts approval.requested a moment before it opens the approval: look again
+setInterval(() => {
+  const r = S.runs.supervised;
+  if (r.approval && !r.granted && !deskFor(r.approval) && S.rec.state === "idle") loadDesk();
+}, 1500);
+
+async function decide(decision) {
+  const d = deskFor(S.runs.supervised.approval);
+  if (!d || S.deskBusy) return;
+  S.deskBusy = true; S.rec.error = ""; draw();
+  try {
+    S.desk = await getJSON(`/api/approval/${encodeURIComponent(d.id)}/decision`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision }) });
+  } catch (err) { S.rec.error = err.message; }
+  S.deskBusy = false; draw();
+}
+
+const MAX_REC_S = 20, WAV_RATE = 16000;
+let mic = null;
+async function startRecording() {
+  if (S.rec.state !== "idle") return;
+  S.rec = { state: "starting", error: "" }; draw();     // until the browser hands over the mic
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(
+      { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(stream);
+    const node = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+    node.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    src.connect(node); node.connect(ctx.destination);
+    mic = { stream, ctx, src, node, chunks, timer: setTimeout(() => stopRecording(false), MAX_REC_S * 1000) };
+    if (S.rec.state !== "starting") { stopRecording(true); return; }   // cancelled, or the run decided
+    S.rec = { state: "recording", error: "" }; draw();
+  } catch (err) {
+    if (S.rec.state === "starting") { S.rec = { state: "idle", error: "Microphone not available: " + err.message }; draw(); }
+  }
+}
+async function stopRecording(discard) {
+  const m = mic; mic = null;
+  if (!m) {                                   // Stop before the mic arrived: cancel
+    if (S.rec.state === "starting" || S.rec.state === "recording") { S.rec = { state: "idle", error: "" }; draw(); }
+    return;
+  }
+  clearTimeout(m.timer);
+  try { m.src.disconnect(); m.node.disconnect(); } catch (e) { /* already closed */ }
+  m.stream.getTracks().forEach(t => t.stop());
+  const rate = m.ctx.sampleRate;
+  m.ctx.close();
+  if (discard) { S.rec = { state: "idle", error: "" }; draw(); return; }
+  const d = deskFor(S.runs.supervised.approval);
+  if (!d) { S.rec = { state: "idle", error: "The approval closed before the audio was sent." }; draw(); return; }
+  S.rec = { state: "sending", error: "" }; draw();
+  try {
+    S.desk = await getJSON(`/api/approval/${encodeURIComponent(d.id)}/voice`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wav_base64: wavBase64(m.chunks, rate) }) });
+    S.rec = { state: "idle", error: "" };
+  } catch (err) {
+    S.rec = { state: "idle", error: err.message };
+  }
+  draw();
+}
+// Voice Transcribe takes WAV only: 16 kHz mono 16-bit PCM, encoded here.
+function wavBase64(chunks, rate) {
+  let n = 0; chunks.forEach(c => { n += c.length; });
+  const pcm = new Float32Array(n); let o = 0;
+  chunks.forEach(c => { pcm.set(c, o); o += c.length; });
+  const ratio = rate / WAV_RATE, len = Math.floor(n / ratio);
+  const buf = new ArrayBuffer(44 + len * 2), v = new DataView(buf);
+  const str = (off, t) => { for (let i = 0; i < t.length; i++) v.setUint8(off + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + len * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, WAV_RATE, true); v.setUint32(28, WAV_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, len * 2, true);
+  for (let i = 0; i < len; i++) {
+    // average the source samples that fall in this output sample (a cheap low-pass)
+    const a = Math.floor(i * ratio), b = Math.max(a + 1, Math.floor((i + 1) * ratio));
+    let sum = 0; for (let j = a; j < b && j < n; j++) sum += pcm[j];
+    const x = Math.max(-1, Math.min(1, sum / (b - a)));
+    v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
 }
 
 // -- navigation and drawing --------------------------------------------------
@@ -520,6 +678,9 @@ function draw() {
     `<div class="keys"><kbd>←</kbd><kbd>→</kbd> views · <kbd>0</kbd>–<kbd>8</kbd> jump · <kbd>A</kbd> follow</div>`;
   const btn = document.getElementById("runverify");
   if (btn) btn.onclick = runVerify;
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on("vrec", startRecording); on("vstop", () => stopRecording(false));
+  on("vapprove", () => decide("approve")); on("vdeny", () => decide("deny"));
 }
 
 // -- live events -------------------------------------------------------------

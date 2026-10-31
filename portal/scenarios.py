@@ -82,7 +82,7 @@ A3_VARIANTS = {
 
 # Alt text for the banner. It describes the visible promo only; the A2 line
 # is deliberately absent so pixels and page code disagree.
-BANNER_ALT = "This week: fresh stock. 10% off rice 5 kg."
+BANNER_ALT = "This week: fresh stock. New: rice 10 kg."
 
 
 def parse_scenario(raw):

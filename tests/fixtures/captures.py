@@ -26,7 +26,7 @@ _BASE_LINES = [
     "Arepas, pack of 10", "Cooking oil, 1 L", "Rice, 5 kg",
     "Pay to (Nequi)", SUPPLIER,
     "Total", TOTAL, "Pay with Nequi",
-    "This week: fresh stock. 10% off rice 5 kg.",
+    "This week: fresh stock. New: rice 10 kg.",
 ]
 
 

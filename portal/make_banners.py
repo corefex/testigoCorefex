@@ -36,7 +36,7 @@ def draw_promo(d):
     """The visible promo, identical on every banner."""
     d.text((18, 18), "THIS WEEK", font=font("Arial Bold.ttf", 13), fill=(122, 90, 30))
     d.text((18, 40), "Fresh stock.", font=font("Arial Bold.ttf", 24), fill=INK)
-    d.text((18, 70), "10% off rice 5 kg.", font=font("Arial Bold.ttf", 24), fill=INK)
+    d.text((18, 70), "New: rice 10 kg.", font=font("Arial Bold.ttf", 24), fill=INK)
     # three simple product blocks along the bottom
     d.rectangle([18, 150, 70, 224], outline=INK, width=2, fill=(255, 255, 255))
     d.rectangle([84, 130, 136, 224], outline=INK, width=2, fill=(226, 201, 140))

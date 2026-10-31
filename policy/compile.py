@@ -184,6 +184,8 @@ def validate_extraction(data, transcript, directory):
         key = _norm(entry["name"])
         if not _said(key, said):
             raise MandateRefused("supplier %r was not said" % entry["name"])
+        if _negated(key, said):
+            raise MandateRefused("supplier %r is said in a negative" % entry["name"])
         if key not in known:
             raise MandateRefused("supplier %r is not in the directory" % entry["name"])
         name, account = known[key]
@@ -196,6 +198,9 @@ def validate_extraction(data, transcript, directory):
     words = data["max_amount_words"].strip()
     if not _said(_norm(words), said):
         raise MandateRefused("the maximum amount was not said")
+    if not _cued(_norm(words), said):
+        raise MandateRefused("the amount %r is not said as a maximum (máximo, hasta, no más de…)"
+                             % words)
     amount = parse_amount_cop(words)
     if amount is None or amount <= 0:
         raise MandateRefused("could not read the amount %r" % words)
@@ -229,13 +234,38 @@ def _check_schema(data):
         off("ask_before_new_recipient is not a boolean")
 
 
-_GROUPED = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
+_GROUPED = re.compile(r"\d{1,3}(?:[., ]\d{3})+\b")
+
+# Words that make an amount a ceiling, and words that turn a supplier into a "do not".
+MAX_CUES = ("maximo", "hasta", "no mas de", "tope", "limite", "como mucho", "a lo sumo")
+NEGATIONS = ("no", "nunca", "jamas")
 
 
 def parse_amount_cop(text):
-    """'ciento cincuenta mil pesos', '150 mil', '150.000', '$150,000' → 150000."""
-    text = _GROUPED.sub(lambda m: re.sub(r"[.,]", "", m.group(0)), str(text or ""))
+    """'ciento cincuenta mil pesos', '150 mil', '150.000', '150 000', '$150,000' → 150000.
+
+    Millions are refused (None), not misread: the parser stops at 999,999."""
+    if "millon" in normalize(str(text or "")):
+        return None
+    text = _GROUPED.sub(lambda m: re.sub(r"[., ]", "", m.group(0)), str(text or ""))
     return spanish_to_int(text)
+
+
+def _before(phrase, said, n):
+    """The n words said right before the first time `phrase` is said."""
+    i = (" %s " % said).find(" %s " % phrase)
+    return said[:max(0, i)].split()[-n:] if i >= 0 else []
+
+
+def _cued(phrase, said):
+    """The amount comes right after a ceiling word ("máximo ciento cincuenta mil")."""
+    window = " %s " % " ".join(_before(phrase, said, 4))
+    return any(" %s " % cue in window for cue in MAX_CUES)
+
+
+def _negated(phrase, said):
+    """"no le pagues a Distribuidora X": a negation in the four words before."""
+    return any(w in NEGATIONS for w in _before(phrase, said, 4))
 
 
 def _norm(text):
@@ -266,10 +296,14 @@ def _stamp_file(path, key_path):
     p.stamp_hash()
     p.sign(seed)
     text = open(path, encoding="utf-8").read()
-    text = re.sub(r'sha256: "[0-9a-f]+"', 'sha256: "%s"' % p.sha256(), text)
-    text = re.sub(r'signature: "ed25519:[^"]*"', 'signature: "%s"' % p.signature, text)
+    # Quoted (hand-written) or plain (yaml.safe_dump) values alike.
+    text = re.sub(r'sha256: "?[0-9a-f]+"?', 'sha256: "%s"' % p.sha256(), text)
+    text = re.sub(r'signature: "?ed25519:[^"\n]*"?', 'signature: "%s"' % p.signature, text)
     open(path, "w", encoding="utf-8").write(text)
-    return p
+    again = load(path)                   # what is on disk, not the object in memory
+    if not again.hash_matches_stored() or again.signature != p.signature:
+        raise MandateRefused("stamping %s did not update its hash and signature" % path)
+    return again
 
 
 HEADER = ("# TESTIGO+ signed policy, compiled from a spoken mandate (F1).\n"

@@ -170,10 +170,27 @@ class MandateTests(unittest.TestCase):
     def test_parse_amount_cop(self):
         cases = {"ciento cincuenta mil pesos": 150000, "150 mil": 150000, "150.000": 150000,
                  "$150,000 COP": 150000, "doscientos treinta y cinco mil": 235000,
-                 "noventa y nueve mil novecientos": 99900, "pesos": None}
+                 "noventa y nueve mil novecientos": 99900, "pesos": None,
+                 "150 000 pesos": 150000, "un millón de pesos": None, "dos millones": None}
         for text, want in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(parse_amount_cop(text), want)
+
+    def test_amount_must_be_said_as_a_maximum(self):
+        # review F1-2: a number said for another reason is not the ceiling
+        t = "Solo puedes pagarle a Distribuidora X, máximo cincuenta mil pesos; el pedido de hoy es de 900 mil"
+        with self.assertRaises(MandateRefused):
+            self.compile(with_(max_amount_words="900 mil", max_per_payment_cop=900000), t)
+        pol, _ = self.compile(with_(max_amount_words="cincuenta mil pesos", max_per_payment_cop=50000), t)
+        self.assertEqual(Policy(pol).max_per_payment_cop, 50000)
+        t2 = "Paga a Distribuidora X hasta 150.000 pesos"
+        self.assertEqual(Policy(self.compile(with_(max_amount_words="150.000 pesos"), t2)[0])
+                         .max_per_payment_cop, 150000)
+
+    def test_supplier_in_a_negative_is_refused(self):
+        t = "No le pagues a Distribuidora X, máximo ciento cincuenta mil pesos"
+        with self.assertRaises(MandateRefused):
+            self.compile(GOOD, t)
 
     def test_text_path_skips_voice(self):
         meta = FakeMeta(GOOD)
@@ -203,6 +220,16 @@ class MandateCliTests(unittest.TestCase):
         rc, out, _ = self.run_cli(GOOD, confirm_answer="n")
         self.assertEqual(rc, 1)
         self.assertFalse(out.exists())
+
+    def test_stamp_updates_a_dumped_policy(self):
+        # review F1-1: yaml.safe_dump writes sha256/signature unquoted
+        rc, out, key = self.run_cli(GOOD)
+        out.write_text(out.read_text().replace("150000", "120000"))
+        self.assertFalse(load(out).hash_matches_stored())
+        pc._stamp_file(out, key)
+        p = load(out)
+        self.assertTrue(p.hash_matches_stored())
+        self.assertTrue(p.signature_valid(keys.public_from_seed(keys.load_seed(key))))
 
     def test_refused_extraction_writes_nothing(self):
         rc, out, _ = self.run_cli(with_(max_per_payment_cop=999999999), extra=["--yes"])

@@ -6,7 +6,8 @@
   testigo keygen                                    # create/show the key at SIGNING_KEY_PATH
 
 The verify output mirrors View 7: a four-step checklist, then one line.
-Exit code 0 only when every check passes.
+Exit code 0 only when every check passes; 1 when a check fails or the
+receipt is malformed; 2 for a usage error (as argparse), e.g. a bad --pubkey.
 """
 
 import argparse
@@ -16,7 +17,7 @@ from pathlib import Path
 from common import config
 
 from . import keys
-from .verify import verify_receipt
+from .verify import MalformedReceipt, verify_receipt
 
 CHECK = "✓"   # ✓
 CROSS = "✗"   # ✗
@@ -28,17 +29,38 @@ def cmd_verify(args):
         guess = Path(args.receipt).resolve().parent
         if (guess / "approved_amount.png").exists():
             evidence = str(guess)
-    pinned = bytes.fromhex(args.pubkey) if args.pubkey else None
+    pinned = None
+    if args.pubkey is not None:
+        pinned = parse_pubkey(args.pubkey)
+        if pinned is None:
+            print("testigo verify: error: --pubkey must be 64 hex characters "
+                  "(a 32-byte Ed25519 public key)", file=sys.stderr)
+            return 2
 
-    res = verify_receipt(args.receipt, evidence_dir=evidence,
-                         policy_path=args.policy, pinned_pubkey=pinned)
+    try:
+        res = verify_receipt(args.receipt, evidence_dir=evidence,
+                             policy_path=args.policy, pinned_pubkey=pinned)
+    except MalformedReceipt as e:
+        print("Malformed receipt: %s" % e)
+        return 1
     print("Checking %s …" % res.receipt_id)
     for c in res.checks:
         mark = CHECK if c.ok else CROSS
         print("[%d/4] %s %s %s" % (c.n, mark, c.name, ("· " + c.detail) if c.detail else ""))
+    if not res.pinned:
+        print(res.key_note())
     print()
     print(res.summary())
     return 0 if res.ok else 1
+
+
+def parse_pubkey(text):
+    """32 raw bytes from a hex public key, or None if it is not one."""
+    try:
+        raw = bytes.fromhex(text.strip())
+    except ValueError:
+        return None
+    return raw if len(raw) == 32 else None
 
 
 def cmd_keygen(args):

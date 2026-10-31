@@ -16,17 +16,26 @@ which includes `pubkey`. Trust comes from pinning that public key out of band;
 `testigo verify --pubkey <hex>` does exactly that.
 """
 
+import hashlib
 import json
 import os
 import re
 
 from common import clock
-from interceptor.channels import sha_crop
 from . import keys
 
 CONFIRMED = "confirmed"   # the payment went through
 BLOCKED = "blocked"       # it never did; executed is null (F9-D4)
 CROP_NAMES = ("amount", "recipient")
+ACCOUNT_RE = re.compile(r"\b\d{3}-[\dx]{3}-\d{4}\b", re.IGNORECASE)
+
+
+def sha_crop(data):
+    """sha256 over the crop bytes; the same hash as interceptor.channels.sha_crop
+    (kept here so the interceptor can import this module without a cycle)."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
 
 
 def canonical(receipt):
@@ -46,25 +55,36 @@ def new_id(now=None):
 
 
 def norm_read(name, text):
-    """A read value as compared: the amount's digits; the recipient's letters
-    and digits in lower case (spacing, case and punctuation do not count)."""
+    """A read value as compared: the amount's digits. The recipient: its account
+    numbers (ddd-ddd-dddd, masked digits as x), sorted, de-duplicated, lower
+    case, joined by ","; labels and names around them ("PAY TO (NEQUI ACCOUNT)",
+    "To") differ between screens and do not count. With no account number, its
+    letters and digits in lower case (spacing, case and punctuation do not count)."""
     if text is None:
         return None
     if name == "amount":
         return re.sub(r"\D", "", str(text))
+    accounts = sorted({a.lower() for a in ACCOUNT_RE.findall(str(text))})
+    if accounts:
+        return ",".join(accounts)
     return re.sub(r"[\W_]+", "", str(text).lower())
 
 
 def compare(approved_read, executed_read, approved_hashes, executed_hashes):
     """{'status': match|mismatch|pending, 'by': read|hash|None}.
 
-    By the read values when both sides have them; else by hash (old receipts,
-    fixtures); pending when nothing was captured after the click.
+    By the read values when both sides have them. When only one side has read
+    values the comparison is pending: real captures of unchanged content do not
+    hash equal, so a hash fallback would invent a mismatch (or a match). By hash
+    only when neither side has read values (old receipts, fixtures); pending
+    when nothing was captured after the click.
     """
     if approved_read and executed_read:
         same = all(norm_read(n, approved_read.get(n)) == norm_read(n, executed_read.get(n))
                    for n in CROP_NAMES)
         return {"status": "match" if same else "mismatch", "by": "read"}
+    if approved_read or executed_read:
+        return {"status": "pending", "by": None}
     if executed_hashes:
         same = all(approved_hashes.get(n) == executed_hashes.get(n) for n in CROP_NAMES)
         return {"status": "match" if same else "mismatch", "by": "hash"}
@@ -121,7 +141,7 @@ def build(policy, action_text, amount_cop, recipient_text,
 
 def parse_signature(receipt):
     raw = receipt.get("signature", "")
-    if not raw.startswith("ed25519:"):
+    if not isinstance(raw, str) or not raw.startswith("ed25519:"):
         return None
     try:
         return bytes.fromhex(raw.split(":", 1)[1])
@@ -135,8 +155,11 @@ def verify_signature(receipt, pinned_pubkey=None):
         return False
     pub = pinned_pubkey
     if pub is None:
+        raw = receipt.get("pubkey", "")
+        if not isinstance(raw, str):
+            return False
         try:
-            pub = bytes.fromhex(receipt.get("pubkey", ""))
+            pub = bytes.fromhex(raw)
         except ValueError:
             return False
     return keys.verify(pub, canonical(receipt), sig)

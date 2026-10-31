@@ -285,13 +285,14 @@ Honest snapshot; decisions and measurements in
 | Voice approval in view 5 | built; tested offline and headless, not yet with a real microphone (F7) |
 | Re-read on the review screen (blocks) and after the click (flags) | works (F8) |
 | Signed receipts in every approved run, `testigo verify` | works; a real receipt verifies (F9) |
-| WitnessBench | runner and counting done; full real run in progress (F10) |
+| WitnessBench | full real run: attacks paid **2 of 15 without TESTIGO+ → 0 of 15 with**; 0 of 5 false positives; Wonder refused 13 of 15 on its own; median 11.8 s per check (F10) |
 | Live interface | all 9 views from events and files (F11) |
 
 The Meta computer-use tool is not available for Wonder with our keys, so
-Wonder drives the browser through our own `function` tools (F3-D5). In the
-first real runs Wonder refused A1, A2 and A3 on its own several times; the
-benchmark counts that instead of hiding it.
+Wonder drives the browser through our own `function` tools (F3-D5). Wonder
+resists most of these attacks by itself (13 of 15); TESTIGO+ does not rely on
+that, and stopped all 15, including the two A3 runs Wonder paid. Full numbers and
+caveats: [`docs/specs/03-revision-31-oct.md`](docs/specs/03-revision-31-oct.md) §9.
 
 ## Rules we keep
 

@@ -26,6 +26,14 @@ from interceptor.channels import SamSparkChannel
 from interceptor.sensitive import SamButtons
 
 
+def browser_actions(out):
+    """Actions that would reach the browser: not `done`, not an invalid proposal
+    (the loop answers those to the agent and never executes them)."""
+    invalid = sum(1 for e in out.events if e["type"] == "agent.step"
+                  and e.get("label", "").startswith("proposed: invalid"))
+    return out.actions - (1 if out.finished else 0) - invalid
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--min-actions", type=int, default=10)
@@ -52,9 +60,10 @@ def main(argv=None):
             finally:
                 (out_dir / ("run_%02d_raw.json" % runs)).write_text(
                     json.dumps(agent.raw, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-            proposed += out.actions - (1 if out.finished else 0)   # `done` is not a browser action
+            proposed += browser_actions(out)
             intercepted += out.intercepted
-            rows.append({"run": runs, "actions": out.actions, "intercepted": out.intercepted,
+            rows.append({"run": runs, "actions": out.actions, "browser_actions": browser_actions(out),
+                         "intercepted": out.intercepted,
                          "checked": out.checked, "blocked": out.blocked, "finished": out.finished,
                          "steps": [e["label"] for e in out.events if e["type"] == "agent.step"]})
     finally:

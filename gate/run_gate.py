@@ -56,7 +56,7 @@ def blockers(needs):
     return out
 
 
-def run_item(script):
+def run_item(script, threshold=""):
     """Run one gate script; its JSON line, or a failed result when it printed none."""
     p = subprocess.run([sys.executable, "-m", "gate." + script], stdout=subprocess.PIPE, text=True)
     for line in reversed(p.stdout.splitlines()):
@@ -66,8 +66,13 @@ def run_item(script):
                 return json.loads(line)
             except ValueError:
                 break
-    return {"pass": False, "metric": "the script crashed (exit %d)" % p.returncode,
-            "details": {"stdout_tail": p.stdout[-500:]}}
+    return crashed(p.returncode, p.stdout, threshold)
+
+
+def crashed(returncode, stdout, threshold):
+    """The contract's result for a script that printed no result line."""
+    return {"pass": False, "metric": "the script crashed (exit %d)" % returncode,
+            "threshold": threshold, "n": 0, "details": {"stdout_tail": stdout[-500:]}}
 
 
 def mark(result):
@@ -100,7 +105,7 @@ def main(argv=None):
                             "details": {}}
             continue
         print("gate: running %s ..." % gid, file=sys.stderr, flush=True)
-        results[gid] = dict(run_item(script), id=gid)
+        results[gid] = dict(run_item(script, line), id=gid)
 
     print("\nGate de hoy (%s)" % clock.today())
     for gid, script, mandatory, needs, line in selected:

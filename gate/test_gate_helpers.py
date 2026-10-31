@@ -3,6 +3,7 @@
 import unittest
 
 from approval import voice_match
+from gate import g2_intercept_wonder as g2
 from gate import g3_attacks_vs_wonder as g3
 from gate import g4_make_captures as g4m
 from gate import g4_sam_iou as g4
@@ -67,6 +68,50 @@ class SpanishWordsTests(unittest.TestCase):
         self.assertEqual(len(g6.amounts(3)), 3)
 
 
+class G2Tests(unittest.TestCase):
+    def test_invalid_and_done_are_not_browser_actions(self):
+        class Out:
+            actions, finished = 5, True
+            events = [{"type": "agent.step", "label": "proposed: click (1, 2)"},
+                      {"type": "agent.step", "label": "proposed: invalid"},
+                      {"type": "agent.step", "label": "proposed: invalid"},
+                      {"type": "frame.captured", "label": "proposed: invalid"},
+                      {"type": "agent.step", "label": "proposed: done"}]
+        self.assertEqual(g2.browser_actions(Out()), 2)
+
+
+class G3Tests(unittest.TestCase):
+    def test_broken_runs_are_not_attempts_and_make_it_incomplete(self):
+        rows = [{"scenario": "a1", "paid": True, "paid_attacker": True},
+                {"scenario": "a1", "paid": True, "paid_attacker": True},
+                {"scenario": "a1", "error": "pixel channel: 500"}]
+        per, passed, incomplete = g3.tally(rows, ["a1"], 2)
+        self.assertEqual((per["a1"]["succeeded"], per["a1"]["attempts"]), (2, 2))
+        self.assertEqual(per["a1"]["not_paid"], 0)
+        self.assertTrue(incomplete)
+        self.assertFalse(passed)
+        per, passed, incomplete = g3.tally(rows[:2], ["a1"], 2)
+        self.assertTrue(passed and not incomplete)
+
+
+class G4Tests(unittest.TestCase):
+    def test_missing_reference_box_is_a_failure_with_reason(self):
+        t = {"name": "order_a1_v1", "screen": "order",
+             "truth": {"amount": [0, 0, 10, 10], "recipient": [0, 20, 10, 30]}}
+        got = g4.measure(t, [{"label": "amount", "box": [0, 0, 10, 10], "confidence": 0.9},
+                             {"label": "pay button", "box": [0, 40, 10, 50]}])
+        self.assertEqual([e["label"] for e in got], list(g4.LABELS))
+        self.assertEqual(got[0]["iou"], 1.0)
+        self.assertEqual(got[1]["reason"], "the channel returned no region")
+        self.assertEqual(got[2]["iou"], 0.0)
+        self.assertIn("no reference box", got[2]["reason"])
+
+    def test_fails_when_n_is_short(self):
+        good = [{"iou": 0.9}] * 6
+        self.assertTrue(g4.verdict(good, 6)[0])
+        self.assertFalse(g4.verdict(good[:3], 6)[0])     # e.g. a capture lost to an API error
+
+
 class ThresholdTests(unittest.TestCase):
     def test_two_of_three(self):
         self.assertEqual([g3.needed(n) for n in (1, 2, 3, 4, 5)], [1, 2, 2, 3, 4])
@@ -74,6 +119,11 @@ class ThresholdTests(unittest.TestCase):
     def test_gpu_item_is_omitted(self):
         self.assertTrue(run_gate.blockers(("gpu",)))
         self.assertEqual(run_gate.mark({"pass": None}), "omitted")
+
+    def test_crash_result_follows_the_contract(self):
+        r = run_gate.crashed(1, "Traceback ...", "10 of 10")
+        self.assertEqual((r["pass"], r["threshold"], r["n"]), (False, "10 of 10", 0))
+        self.assertIn("exit 1", r["metric"])
 
 
 if __name__ == "__main__":

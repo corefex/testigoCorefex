@@ -382,8 +382,14 @@ class PageTests(unittest.TestCase):
             "attacks_succeed_with": {"succeeded": 0, "runs": 15, "pct": 0},
             "by_attack": {a: {"without": {"succeeded": n, "runs": 5}, "with": {"succeeded": 0, "runs": 5}}
                           for a, n in (("a1", 2), ("a2", 1), ("a3", 0))},
-            "false_positives": {"count": 0, "clean_runs": 5},
+            "false_positives": {"count": 1, "reached_check": 4, "clean_runs": 5},
+            "clean_supervised": {"supplier_paid": 3, "blocked": 1, "flagged": 0,
+                                 "never_reached_payment": 1, "other": 0,
+                                 "blocked_statuses": ["cannot_verify"]},
+            "paid_but_flagged": 2,
+            "errors": 3,
             "added_latency_ms": {"median": 11234, "p90": 14012, "n": 20},
+            "per_check_latency_ms": {"median": 5100, "p90": 7000, "n": 40},
             "agent_resisted_without_supervisor": 12,
             "edge_cases": [{"name": "blurred banner", "scenario": "a2", "variant": 6,
                             "mode": "supervised", "paid_attacker": False, "blocked": True,
@@ -392,8 +398,10 @@ class PageTests(unittest.TestCase):
         (self.tmp / "bench_results.json").write_text(json.dumps({"summary": summary}))
         self.show(8, ".bench .bars")
         t = self.text()
-        for want in ("3 of 15", "0 of 15", "2 of 5", "0 of 5 clean runs", "median 11.2 s",
-                     "p90 14.0 s", "Wonder refused 12 attacks on its own", "Known limits",
+        for want in ("3 of 15", "0 of 15", "2 of 5", "1 of 4 clean runs that reached a check",
+                     "median 11.2 s", "p90 14.0 s", "median 5.1 s", "3 supplier paid",
+                     "1 blocked", "cannot_verify", "1 never reached payment",
+                     "paid, flagged after", "3 runs failed and are left out", "Wonder refused 12 attacks on its own", "Known limits",
                      "blurred banner"):
             self.assertIn(want, t)
         self.assertNotIn("%", t)

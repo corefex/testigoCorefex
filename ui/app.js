@@ -614,7 +614,23 @@ const render = {
     }).join("");
     const fp = s.false_positives || {}, lat = s.added_latency_ms || {};
     const sec = ms => Number.isFinite(ms) ? (ms / 1000).toFixed(1) + " s" : "—";
-    const fpText = Number.isFinite(fp.count) && Number.isFinite(fp.clean_runs) ? `${esc(fp.count)} of ${esc(fp.clean_runs)} clean runs` : "—";
+    const fpText = Number.isFinite(fp.count) && Number.isFinite(fp.reached_check)
+      ? `${esc(fp.count)} of ${esc(fp.reached_check)} clean runs that reached a check`
+      : Number.isFinite(fp.count) && Number.isFinite(fp.clean_runs) ? `${esc(fp.count)} of ${esc(fp.clean_runs)} clean runs` : "—";
+    const pc = s.per_check_latency_ms || {};
+    const perCheck = Number.isFinite(pc.median) ? ` · per check <b>median ${esc(sec(pc.median))} · p90 ${esc(sec(pc.p90))}</b>` : "";
+    const cb = s.clean_supervised;
+    const n = x => Number.isFinite(x) ? x : 0;
+    const cleanLine = cb && typeof cb === "object"
+      ? `<div class="clean muted">Clean runs with TESTIGO+${Number.isFinite(fp.clean_runs) ? ` (${esc(fp.clean_runs)})` : ""}:
+          ${esc(n(cb.supplier_paid))} supplier paid · ${esc(n(cb.blocked))} blocked${Array.isArray(cb.blocked_statuses) && cb.blocked_statuses.length ? ` <span class="mono">(${esc(cb.blocked_statuses.join(", "))})</span>` : ""}
+          · ${esc(n(cb.flagged))} flagged · ${esc(n(cb.never_reached_payment))} never reached payment${n(cb.other) ? ` · ${esc(cb.other)} other` : ""}</div>` : "";
+    const flaggedAfter = Number(s.paid_but_flagged) > 0
+      ? `<div class="flagged">${esc(s.paid_but_flagged)} of the paid attack${s.paid_but_flagged === 1 ? "" : "s"} with TESTIGO+: paid, flagged after (the money left; the receipt says so).</div>` : "";
+    const unapproved = Number(s.paid_unapproved) > 0
+      ? `<div class="flagged">${esc(s.paid_unapproved)} paid without a check or approval.</div>` : "";
+    const failed = Number(s.errors) > 0
+      ? `<div class="notice warn">${ICON.warn}<div>${esc(s.errors)} run${s.errors === 1 ? "" : "s"} failed and ${s.errors === 1 ? "is" : "are"} left out (API or browser errors, not results).</div></div>` : "";
     const resisted = Number(s.agent_resisted_without_supervisor) > 0
       ? `<div class="resisted">${ICON.user}<span>Wonder refused ${esc(s.agent_resisted_without_supervisor)} attack${s.agent_resisted_without_supervisor === 1 ? "" : "s"} on its own, without TESTIGO+.</span></div>` : "";
     const edges = Array.isArray(s.edge_cases) && s.edge_cases.length
@@ -626,8 +642,9 @@ const render = {
       <div class="num"><span class="from">${esc(wo.succeeded)}<small> of ${esc(wo.runs)}</small></span><span class="arrow">→</span><span class="to">${esc(wi.succeeded)}<small> of ${esc(wi.runs)}</small></span></div>
       ${lbls}
       <div class="bars">${bars}</div>
-      <div class="meta">False positives: <b>${fpText}</b> · Added latency: <b>median ${esc(sec(lat.median))} · p90 ${esc(sec(lat.p90))}</b>${Number.isFinite(lat.n) && lat.n ? ` <span class="muted">(n=${esc(lat.n)})</span>` : ""}</div>
-      ${resisted}${edges}
+      ${flaggedAfter}${unapproved}
+      <div class="meta">False positives: <b>${fpText}</b> · TESTIGO+ time per run: <b>median ${esc(sec(lat.median))} · p90 ${esc(sec(lat.p90))}</b>${Number.isFinite(lat.n) && lat.n ? ` <span class="muted">(n=${esc(lat.n)})</span>` : ""}${perCheck}</div>
+      ${cleanLine}${resisted}${failed}${edges}
     </div>`;
   },
 };

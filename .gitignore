@@ -19,3 +19,6 @@ build/
 
 # OS
 .DS_Store
+
+# Internal research notes, not for the public repo
+docs/research/

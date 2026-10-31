@@ -27,6 +27,8 @@ from interceptor.engine import Interceptor
 from interceptor.policy import load as load_policy
 
 from interceptor.sensitive import payment_only
+from receipts import bundle
+from receipts.receipt import CROP_NAMES
 
 from .approval import AutoApprover
 from .driver import ATTACKER_ACCT
@@ -51,7 +53,8 @@ class Outcome:
         self.denied = False
         self.executed = False
         self.receipt_flagged = False
-        self.receipt = None
+        self.receipt = None         # the signed receipt (F9), if any
+        self.receipt_path = None    # its receipt.json, when written to run_dir
         self.payment = None
 
     @property
@@ -78,9 +81,14 @@ class Outcome:
 
 
 def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, sink=None,
-        sensitive=payment_only, max_steps=MAX_STEPS):
+        sensitive=payment_only, max_steps=MAX_STEPS, run_dir=None, signing_key=None):
     """`sensitive(action, capture) -> (bool, reason)` decides which actions get
-    the full check; real runs pass interceptor.sensitive.SamButtons."""
+    the full check; real runs pass interceptor.sensitive.SamButtons.
+
+    An approved payment leaves a signed receipt (F9): written with its crop
+    PNGs to `run_dir` (None: kept in memory only), signed with `signing_key`
+    (a seed or key-file path; None: SIGNING_KEY_PATH, which test doubles never
+    use). Without a key the run goes on and says the receipt was not signed."""
     approver = approver or AutoApprover()
     out = Outcome("supervised" if supervised else "no_supervisor",
                   getattr(driver, "scenario", None), getattr(driver, "variant", None),
@@ -129,6 +137,7 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                         out.denied = True
                         return out
                     approved_crops = decision.approval_event["crops"]
+                    approved_bytes = {n: obs.crops.get(n, b"") for n in CROP_NAMES}
 
         driver.execute(action)
         agent.result(action, "executed")
@@ -141,15 +150,17 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                                      out.payment.get("amount_cop")))
         after = driver.observe_after()
         out.emit(ev.frame_captured(after.frame, after.sha(), image=getattr(after, "image", None)))
-        if supervised and approved_crops is not None and not after.crops:
-            out.emit(ev.agent_step(after.frame, "verify after the click: pending (F8)"))
-        elif supervised and approved_crops is not None:
-            vr = interceptor.verify(approved_crops, after)
-            out.emit(vr)
-            out.receipt_flagged = vr["status"] == ev.MISMATCH
-            out.receipt = build_receipt(policy, decision.approval_event, after,
-                                        vr, out.receipt_flagged)
-            out.emit(ev.receipt_signed(out.receipt["id"], out.receipt["signature"]))
+        if supervised and approved_crops is not None:
+            vr = None
+            if not after.crops:
+                out.emit(ev.agent_step(after.frame, "verify after the click: pending (F8)"))
+            else:
+                vr = interceptor.verify(approved_crops, after)
+                out.emit(vr)
+                out.receipt_flagged = vr["status"] == ev.MISMATCH
+            _sign_receipt(out, policy, decision.approval_event, info, approved_bytes,
+                          after if vr else None, vr, _agent_name(agent, policy),
+                          run_dir, _key_for(driver, signing_key), after.frame)
         return out
 
     out.max_steps = True
@@ -174,19 +185,35 @@ def _as_payment(action):
     return action if action.get("kind") == "pay" else dict(action, kind="pay")
 
 
-def build_receipt(policy, approval_event, executed_capture, verify_result, flagged):
-    """Unsigned receipt preview. Signing lives in receipts/ (to be unified in F9)."""
-    return {
-        "id": "rcpt_2041_7f3a",
-        "time": executed_capture.ts or "2026-10-28T09:16:05-05:00",
-        "agent": "wonder@marta-shop",
-        "action": "pay %s COP -> %s" % (
-            approval_event["amount_cop"], approval_event["recipient"]),
-        "policy_sha256": policy.sha256(),
-        "approved": dict(approval_event["crops"]),
-        "executed": dict(verify_result["executed"]),
-        "approval": {"method": "passkey",
-                     "voice_transcript": "ciento veinte mil pesos a Distribuidora X"},
-        "flagged": flagged,
-        "signature": "ed25519:PLACEHOLDER (signed in receipts/)",
-    }
+def _key_for(driver, signing_key):
+    """The owner's key (SIGNING_KEY_PATH) never signs a test double's evidence."""
+    if signing_key is None and getattr(driver, "is_test_double", False):
+        return False
+    return signing_key
+
+
+def _agent_name(agent, policy):
+    return "%s@%s" % (getattr(agent, "tool", None) or type(agent).__name__.lower(), policy.owner)
+
+
+def _sign_receipt(out, policy, approval_event, info, approved_bytes, after, vr,
+                  agent_name, run_dir, signing_key, frame):
+    """F9: sign the receipt of the approved payment (receipts/bundle.py). A
+    missing key or an unwritable folder is reported, never fatal."""
+    if signing_key is False:
+        seed, why = None, "test run without a test key (the owner's key never signs test evidence)"
+    else:
+        seed, why = bundle.signing_seed(signing_key)
+    if seed is None:
+        out.emit(ev.agent_step(frame, "receipt not signed: %s" % why))
+        return
+    try:
+        out.receipt, out.receipt_path = bundle.sign_payment(
+            policy, approval_event, info, approved_bytes, seed,
+            executed_crops=bundle.crops_of(after), verify_result=vr,
+            run_dir=run_dir, agent=agent_name)
+    except OSError as e:
+        out.emit(ev.agent_step(frame, "receipt not written: %s" % e))
+        return
+    rel = bundle.runs_relative(out.receipt_path) if out.receipt_path else None
+    out.emit(ev.receipt_signed(out.receipt["id"], out.receipt["signature"], path=rel))

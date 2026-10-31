@@ -22,7 +22,7 @@ Specs de cada feature (objetivo, entradas y salidas, criterios de aceptación, q
 | `F6-motor-de-decision.md` | Las reglas de decisión | Borrador; implementado (cuenta atada por F1, divergencia filtrada por F5); falta la latencia medida (F4) |
 | `F7-aprobacion.md` | Cápsula con voz y passkey | Borrador; implementada la coincidencia de voz (número en español → entero, comparación contra los píxeles); faltan WebAuthn y Voice real (claves/navegador) |
 | `F8-verificacion.md` | Verificación antes de confirmar y después del clic | Borrador |
-| `F9-recibos-y-verify.md` | Recibos firmados y la CLI `verify` | Borrador |
+| `F9-recibos-y-verify.md` | Recibos firmados y la CLI `verify` | Borrador; implementado el recibo real en el loop: id y hora generados, aprobación del aprobador, firma Ed25519 con la llave del dueño, `receipt.json` y recortes en `runs/<fecha>/<corrida>/`, `receipt.signed.path`; el paso 4 compara los valores leídos de los recortes (o el hash en recibos viejos) y respeta `blocked`; sin llave la corrida sigue y lo dice; falta que F8 entregue lo leído después del clic |
 | `F10-witnessbench.md` | Las 20 corridas y los resultados | Borrador |
 | `F11-interfaz.md` | Las vistas conectadas a los eventos | Borrador; implementada (WebSocket, 9 vistas, verify real, aviso de datos de prueba); faltan capturas y recortes reales (F3/F4), voz y passkey en vivo (F1/F7) |
 

@@ -13,7 +13,8 @@ from interceptor.policy import load as load_policy
 from tests.fixtures.bundles import build_bundle
 
 from . import keys
-from .receipt import build, canonical, verify_signature
+from .bundle import write as write_bundle
+from .receipt import BLOCKED, build, canonical, verify_signature
 from .verify import verify_receipt
 
 POLICY = str(POLICY_PATH)
@@ -121,6 +122,87 @@ class VerifyChecksTests(unittest.TestCase):
         # step 3 skipped, but step 4 still catches the recorded mismatch
         self.assertFalse(res.ok)
         self.assertEqual(res.first_failure.n, 4)
+
+
+class ReadValueTests(unittest.TestCase):
+    """Real captures: equal regions do not hash equal (SAM's boxes move), so
+    step 4 decides on the values read from the crops; hashes guard the files."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = load_policy(POLICY)
+        cls.seed = keys.generate_seed()
+
+    def _write(self, **kw):
+        approved = {"amount": b"A1", "recipient": b"R1"}
+        executed = kw.pop("executed", {"amount": b"A2", "recipient": b"R2"})   # moved boxes
+        r = build(self.policy, "pay", 120000, "Distribuidora X · 310-XXX-4417",
+                  approved, executed, {"method": "console", "voice_transcript": ""}, self.seed,
+                  approved_read={"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
+                  **kw)
+        d = Path(tempfile.mkdtemp())
+        write_bundle(r, approved, executed, d)
+        return r, d
+
+    def test_same_read_values_pass_though_hashes_differ(self):
+        r, d = self._write(executed_read={"amount": "COP 120,000",
+                                          "recipient": "distribuidora x 310-XXX-4417"})
+        self.assertEqual(r["comparison"], {"status": "match", "by": "read"})
+        res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
+        self.assertTrue(res.ok, res.summary())
+
+    def test_changed_recipient_read_fails_step_four(self):
+        r, d = self._write(executed_read={"amount": "COP 120,000", "recipient": "300-XXX-0000"})
+        self.assertEqual(r["comparison"]["status"], "mismatch")
+        res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
+        self.assertEqual(res.first_failure.n, 4)
+        self.assertTrue(res.checks[1].ok)
+        self.assertEqual(res.summary(), "Evidence mismatch at step 4")
+
+    def test_swapped_executed_file_fails_step_four(self):
+        _, d = self._write(executed_read={"amount": "120000",
+                                          "recipient": "Distribuidora X · 310-XXX-4417"})
+        Path(d, "executed_amount.png").write_bytes(b"tampered")
+        res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
+        self.assertEqual(res.first_failure.n, 4)
+        self.assertIn("file", res.first_failure.detail)
+
+    def test_nothing_captured_after_click_is_reported_not_invented(self):
+        r, d = self._write(executed=None)
+        self.assertIsNone(r["executed"])
+        self.assertEqual(r["comparison"]["status"], "pending")
+        res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
+        self.assertEqual(res.first_failure.n, 4)
+        self.assertIn("not recorded", res.summary())
+
+    def test_blocked_receipt_has_no_executed_and_no_step_four(self):
+        r, d = self._write(status=BLOCKED, blocked_at="review", executed=None)
+        self.assertIsNone(r["executed"])
+        self.assertEqual(r["blocked_at"], "review")
+        res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
+        self.assertTrue(res.ok, res.summary())
+        self.assertIn("not applicable", res.checks[3].detail)
+
+    def test_id_and_time_are_generated(self):
+        a, _ = self._write(executed_read=None)
+        b, _ = self._write(executed_read=None)
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertTrue(a["time"].endswith("-05:00"))
+
+
+class ExamplesTests(unittest.TestCase):
+    """The published examples keep verifying with the old (hash-only) format."""
+
+    def test_examples(self):
+        root = Path(__file__).resolve().parent.parent / "examples"
+        pub = bytes.fromhex((root / "pubkey.txt").read_text().strip())
+        clean = verify_receipt(str(root / "clean/receipt.json"), evidence_dir=str(root / "clean"),
+                               policy_path=POLICY, pinned_pubkey=pub)
+        self.assertTrue(clean.ok)
+        self.assertEqual(clean.summary(), "Signature valid — evidence hashes match")
+        a3 = verify_receipt(str(root / "a3/receipt.json"), evidence_dir=str(root / "a3"),
+                            policy_path=POLICY, pinned_pubkey=pub)
+        self.assertEqual(a3.summary(), "Evidence mismatch at step 4")
 
 
 if __name__ == "__main__":

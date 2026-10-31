@@ -17,8 +17,11 @@ make test                                      # tests
 ```
 
 `examples/` holds synthetic receipts signed with a throwaway key (decision D7).
-Real receipts come from real runs (F9) and live in `runs/evidence/`, which is
-git-ignored. The fixture bundle builder is in `tests/fixtures/bundles.py`.
+Real receipts come from real runs: when a supervised run approves and
+executes a payment, the loop signs the receipt with the owner's key
+(SIGNING_KEY_PATH) and writes it with its crop PNGs into the run folder,
+`runs/<date>/<run>/` (git-ignored). Without a key the run goes on and says the
+receipt was not signed. The fixture bundle builder is in `tests/fixtures/bundles.py`.
 
 ## The four checks (View 7)
 
@@ -38,7 +41,15 @@ Signature valid — evidence hashes match
 | 1 | policy | the receipt's `policy_sha256` ≠ the signed policy's hash |
 | 2 | signature | the Ed25519 signature doesn't verify (tampered receipt) |
 | 3 | approved | an approved crop file doesn't hash to its recorded value |
-| 4 | executed | executed crops ≠ approved crops |
+| 4 | executed | what executed ≠ what was approved, an executed crop file doesn't hash to its recorded value, or nothing was recorded after the click |
+
+Hashes guard the evidence files; they cannot say whether two real captures show
+the same thing (SAM's boxes move a few pixels between captures). So a receipt
+from a run also records the text read from each crop (`read.approved`,
+`read.executed`) and the signed `comparison` (`match`/`mismatch`/`pending`, by
+`read` or `hash`). Step 4 recomputes it from the signed values: by the read
+values when both are there, else by hash equality (as in `examples/`). A
+`blocked` receipt (`executed: null`, `blocked_at`) has no step 4 to fail.
 
 Two distinct failures, both shown in View 7:
 
@@ -84,6 +95,7 @@ the receipt is the number that was checked.
 receipts/
   keys.py          keygen / sign / verify (cryptography); key files in .secrets/
   receipt.py       build + sign; canonical serialization; signature verify
+  bundle.py        the receipt of a run: key, sign, write receipt.json + crops
   verify.py        the four checks (library)
   cli.py           `testigo verify|keygen` (installed as the `testigo` command)
   test_receipts.py tests

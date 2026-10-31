@@ -56,7 +56,8 @@ agent/
   driver.py    BrowserDriver + PlaywrightDriver stub (F3)
   agent.py     Agent + ComputerUseAgent stub (F3);
                parse_action() is the gate-test-2 seam (Wonder's action format)
-  approval.py  Approver; AutoApprover / DenyApprover + WebAuthnApprover stub
+  approval.py  Approver; AutoApprover / DenyApprover (tests), ServiceApprover
+               (voice + click in view 5), ConsoleApprover, WebAuthnApprover stub
   loop.py      the supervised loop + --no-supervisor; builds the receipt
   test_loop.py tests
 ```

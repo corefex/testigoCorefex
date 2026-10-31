@@ -39,7 +39,12 @@ def normalize(text):
 
 
 def spanish_to_int(text):
-    """Parse a Spanish number phrase (0–999,999) into an int, or None."""
+    """Parse a Spanish number phrase (0–999,999) into an int, or None.
+
+    A transcriber may also write the number in digits with thousands
+    separators ("120.000", "120,000", "$120 000"); those groups are joined
+    first so they do not read as 120 + 0."""
+    text = re.sub(r"(?<=\d)[.,\s](?=\d{3}(?!\d))", "", str(text or ""))
     tokens = [t for t in normalize(text).split() if t and t != "y"]
     if not tokens:
         return None
@@ -68,15 +73,32 @@ def amount_matches(transcript, pixel_amount_cop):
     return spoken is not None and spoken == int(pixel_amount_cop)
 
 
+# Spanish names of letters, for a one-letter word in a name ("Distribuidora
+# X" is read aloud, and may be transcribed, as "Distribuidora equis").
+_LETTERS = {"a": "a", "be": "b", "ce": "c", "de": "d", "e": "e", "efe": "f",
+            "ge": "g", "hache": "h", "i": "i", "jota": "j", "ka": "k", "ele": "l",
+            "eme": "m", "ene": "n", "o": "o", "pe": "p", "cu": "q", "erre": "r",
+            "ese": "s", "te": "t", "u": "u", "uve": "v", "equis": "x", "ye": "y",
+            "zeta": "z"}
+
+
 def recipient_matches(transcript, pixel_recipient_text):
-    """True when the recipient name read from the pixels is spoken."""
-    said = normalize(transcript)
-    name = normalize(_name_of(pixel_recipient_text))
-    return bool(name) and name in said
+    """True when the recipient name read from the pixels is spoken, word by
+    word and in order (a one-letter word may be said by its letter name)."""
+    said = normalize(transcript).split()
+    name = normalize(name_of(pixel_recipient_text)).split()
+    if not name:
+        return False
+
+    def same(heard, want):
+        return heard == want or (len(want) == 1 and _LETTERS.get(heard) == want)
+
+    return any(all(same(said[i + j], w) for j, w in enumerate(name))
+               for i in range(len(said) - len(name) + 1))
 
 
-def _name_of(recipient_text):
-    # the pixels read "Name · account"; the spoken confirmation uses the name
+def name_of(recipient_text):
+    """The pixels read "Name · account"; the spoken confirmation uses the name."""
     return str(recipient_text or "").split("·")[0].split(" - ")[0].strip()
 
 

@@ -228,9 +228,14 @@ class WonderAgentTests(unittest.TestCase):
         agent.result(first, "executed")
         agent.propose(cap)
         _, items, kw = meta.calls[1]
-        self.assertEqual(kw["previous_response_id"], "r1")
+        self.assertNotIn("previous_response_id", kw)      # the whole conversation is sent
+        calls = [i["call_id"] for i in items if i.get("type") == "function_call"]
+        self.assertEqual(calls, ["c1", "c2"])               # the model's calls, replayed
         outputs = [(i["call_id"], i["output"]) for i in items if i.get("type") == "function_call_output"]
         self.assertEqual(outputs, [("c1", "executed"), ("c2", "not executed: one action per turn")])
+        images = [p for i in items if isinstance(i.get("content"), list)
+                  for p in i["content"] if p.get("type") == "input_image"]
+        self.assertEqual(len(images), 1)                    # only the latest screenshot
         self.assertEqual(meta.calls[0][0], "wonder")
         self.assertIn("1280 pixels wide", meta.calls[0][2]["instructions"])
 

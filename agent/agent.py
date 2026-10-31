@@ -75,10 +75,14 @@ class Agent:
 class WonderAgent(Agent):
     """Muse Wonder driving the portal through our function tools.
 
-    The conversation lives on the server (`previous_response_id`). Each turn
-    answers the previous tool call with what happened to it, then shows the new
-    screenshot. Only the first tool call of a turn runs; any other is answered
-    "not executed" so the model never believes an extra action happened.
+    The conversation is kept here and sent whole each turn: chaining it on the
+    server (`previous_response_id`) failed in WitnessBench with "referenced
+    response not found or expired" and 503s (31 Oct). Only the latest screenshot
+    travels as an image; older ones are replaced by a short note, which also
+    keeps the cost of a long run flat. Each turn answers the previous tool call
+    with what happened to it, then shows the new screenshot. Only the first tool
+    call of a turn runs; any other is answered "not executed" so the model never
+    believes an extra action happened.
     """
 
     def __init__(self, meta, tool="wonder", task=TASK, max_output_tokens=4000):
@@ -86,7 +90,7 @@ class WonderAgent(Agent):
         self.tool = tool
         self.task = task
         self.max_output_tokens = max_output_tokens
-        self._prev = None
+        self._history = []        # every input item so far, sent whole each turn
         self._pending = []        # function_call_output items owed to the model
         self._current = None      # call id of the action proposed last
         self.raw = []             # every response, for gate g2 and debugging
@@ -94,16 +98,17 @@ class WonderAgent(Agent):
     def propose(self, observation):
         image = {"type": "input_image",
                  "image_url": meta_client.png_data_url(observation.screenshot)}
-        if self._prev is None:
-            items = [{"role": "user", "content": [{"type": "input_text", "text": self.task}, image]}]
+        if not self._history:
+            new = [{"role": "user", "content": [{"type": "input_text", "text": self.task}, image]}]
         else:
-            items = list(self._pending) + [{"role": "user", "content": [
+            new = list(self._pending) + [{"role": "user", "content": [
                 {"type": "input_text", "text": "The screenshot after your last action."}, image]}]
-        resp, _ = self.meta.respond(self.tool, items, instructions=INSTRUCTIONS, tools=TOOLS,
-                                    previous_response_id=self._prev,
-                                    max_output_tokens=self.max_output_tokens)
+        _drop_old_images(self._history)
+        self._history += new
+        resp, _ = self.meta.respond(self.tool, list(self._history), instructions=INSTRUCTIONS,
+                                    tools=TOOLS, max_output_tokens=self.max_output_tokens)
         self.raw.append(resp.model_dump() if hasattr(resp, "model_dump") else resp)
-        self._prev = resp.id
+        self._history += _replayable(resp)
         actions = parse_action(resp)
         first = actions[0]
         self._pending = [_output(a["call_id"], "not executed: one action per turn")
@@ -115,6 +120,31 @@ class WonderAgent(Agent):
         if self._current:
             self._pending.insert(0, _output(self._current, outcome))
             self._current = None
+
+
+def _drop_old_images(items):
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("content"), list):
+            item["content"] = [p if p.get("type") != "input_image" else
+                               {"type": "input_text", "text": "(earlier screenshot omitted)"}
+                               for p in item["content"]]
+
+
+def _replayable(resp):
+    """The model's turn as input items for the next request: what it said and
+    the tool calls it made (reasoning items stay on the server's side)."""
+    out = []
+    for item in getattr(resp, "output", None) or []:
+        kind = getattr(item, "type", "")
+        if kind == "message":
+            text = "".join(p.text for p in (item.content or [])
+                           if getattr(p, "type", "") == "output_text")
+            if text:
+                out.append({"role": "assistant", "content": text})
+        elif kind == "function_call":
+            out.append({"type": "function_call", "call_id": item.call_id,
+                        "name": item.name, "arguments": item.arguments or "{}"})
+    return out
 
 
 def _output(call_id, text):

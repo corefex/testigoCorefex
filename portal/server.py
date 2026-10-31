@@ -373,14 +373,18 @@ def confirmation_page(last):
     if not last:
         body = "<h1>No payment yet</h1><p class='sub'>Submit the order first.</p>"
     else:
+        # Laid out like the review screen (account and name together, large), so
+        # the result can be read again from the pixels the same way (F8).
         body = (
-            "<h1>Payment sent</h1>"
-            "<p class='sub'>Reference {ref}</p>"
-            "<table style='margin-top:16px'>"
-            "<tr><th>To</th><td data-testid='paid-recipient'>{acct}</td></tr>"
-            "<tr><th>Recipient name</th><td data-testid='paid-recipient-name'>{name}</td></tr>"
-            "<tr><th>Amount</th><td data-testid='paid-amount'>{amt}</td></tr>"
-            "</table>"
+            "<div><h1>Payment sent</h1>"
+            "<span class='sub'>Reference {ref}</span></div>"
+            "<div class='review'>"
+            "<div><div class='label'>Paid to (Nequi account)</div>"
+            "<div class='big' data-testid='paid-recipient'>{acct}</div>"
+            "<div class='name' data-testid='paid-recipient-name'>{name}</div></div>"
+            "<div><div class='label'>Amount</div>"
+            "<div class='big' data-testid='paid-amount'>{amt}</div></div>"
+            "</div>"
         ).format(
             ref=html.escape(last["ref"]), acct=html.escape(last["recipient"]),
             name=html.escape(last["recipient_name"]), amt=money(last["amount_cop"]),

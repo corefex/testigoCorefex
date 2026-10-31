@@ -131,18 +131,32 @@ class SamSparkChannel(PixelChannel):
         self.effort = effort
         self.last_latency_ms = None
         self.errors = []          # API failures (not page content): the bench reports them apart
+        self.attempts = 2
 
     def read_regions(self, capture):
         if self.meta is None or not capture.screenshot:
             return []                      # no model: refuse to vouch for anything
         t0 = time.perf_counter()
-        try:
-            regions = self._read(capture)
-        except Exception as e:  # noqa: BLE001 - any failure is "cannot verify"
-            self.errors.append("%s: %s" % (type(e).__name__, str(e)[:200]))
-            regions = []
+        regions = []
+        # A second read when a required region is missing or unsure: Spark's
+        # rough boxes and SAM's refinement vary between calls (WitnessBench, 31
+        # Oct: the amount went missing once on an honest review screen). Still
+        # missing after two reads is cannot_verify, as before.
+        for _ in range(self.attempts):
+            capture.rendered_lines, capture.crops = [], {}
+            try:
+                regions = self._read(capture)
+            except Exception as e:  # noqa: BLE001 - any failure is "cannot verify"
+                self.errors.append("%s: %s" % (type(e).__name__, str(e)[:200]))
+                regions = []
+            if self._complete(regions):
+                break
         self.last_latency_ms = int(round((time.perf_counter() - t0) * 1000))
         return regions
+
+    def _complete(self, regions):
+        sure = {r["label"] for r in regions if r.get("confidence", 0) >= self.confidence_min}
+        return all(label in sure for label in REQUIRED_REGIONS)
 
     def _read(self, capture):
         png = capture.screenshot

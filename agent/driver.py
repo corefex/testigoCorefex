@@ -69,6 +69,7 @@ class PlaywrightDriver(BrowserDriver):
       execute(action)  -> perform the click/type/keys/scroll on the page
       observe_after()  -> re-capture after the action
       last_payment     -> the payment this run made, from the portal's log
+                          (read with SCORER_TOKEN, like the scoring script)
 
     `rendered_lines` stays empty here: what the pixels say is read by the pixel
     channel (F4/F5), never from the DOM.
@@ -144,8 +145,15 @@ class PlaywrightDriver(BrowserDriver):
         return dict(log[-1]) if len(log) > (self._payments_before or 0) else None
 
     def _payments(self):
+        # The log is for the scorer only (F2 §6): it needs SCORER_TOKEN, sent as a
+        # bearer header so it never lands in a URL or a log line.
+        token = config.settings().scorer_token
+        if not token:
+            raise RuntimeError("SCORER_TOKEN is empty: run `make setup` to generate it in .env")
+        req = urllib.request.Request(self.portal_url + "/api/payments",
+                                     headers={"Authorization": "Bearer " + token})
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(self.portal_url + "/api/payments", timeout=5) as r:
+        with opener.open(req, timeout=5) as r:
             return json.loads(r.read().decode("utf-8"))
 
 

@@ -1,7 +1,7 @@
 """One real run: Wonder drives the portal in Chromium, with or without TESTIGO+.
 
-  .venv/bin/python -m agent.run --scenario clean [--variant 1] [--no-supervisor] [--headed]
-                                [--approve-in interface|console] [--approval-timeout 300]
+  .venv/bin/python -m agent.run --scenario clean [--variant 1] [--no-supervisor [--explain]]
+                                [--headed] [--approve-in interface|console] [--approval-timeout 300]
 
 Uses the real Meta API (spend goes to runs/usage.jsonl). If the portal is not
 up on PORTAL_PORT, one is started in this process. Every event goes to the
@@ -22,6 +22,13 @@ the real pixel channel (F4). An order confirmation that passes needs the person 
 Without the flag: the interface when the interceptor service answers, the
 console otherwise. With no terminal and no interface, nobody approves and the
 order is not confirmed.
+
+  --explain (only with --no-supervisor) after the run has ended, runs the pixel
+                          channel and the code-vs-pixels comparison once on the
+                          frame where the agent confirmed, observe only, and
+                          emits an explain.result event for view 3 (agent/explain.py).
+                          It never changes the run or outcome.json; it is written
+                          to explain.json. WitnessBench never uses it.
 """
 
 import argparse
@@ -35,7 +42,7 @@ from interceptor.channels import SamSparkChannel, sha_crop
 from interceptor.sensitive import SamButtons
 from interceptor.sink import default_sink, service_url
 
-from . import loop
+from . import explain, loop
 from .agent import WonderAgent
 from .approval import ConsoleApprover, ServiceApprover
 from .driver import open_portal
@@ -143,7 +150,12 @@ def main(argv=None):
                          "the interceptor service is up, else the console)")
     ap.add_argument("--approval-timeout", type=float, default=300.0,
                     help="seconds to wait for the person in the interface before denying")
+    ap.add_argument("--explain", action="store_true",
+                    help="with --no-supervisor: after the run, read the confirming frame once "
+                         "with the pixel channel, for view 3 (observe only; costs one read)")
     args = ap.parse_args(argv)
+    if args.explain and not args.no_supervisor:
+        ap.error("--explain is for --no-supervisor runs (a supervised run already checks every frame)")
 
     s = config.settings()
     httpd = None if portal_up(s.portal_url) else start_portal()
@@ -159,13 +171,14 @@ def main(argv=None):
     pixels = SamSparkChannel(meta)
     crops = CropFiles(pixels, run_dir)
     approver = choose_approver(args.approve_in, args.approval_timeout, crops)
+    sink = _Tee(run_dir / "events.jsonl", default_sink())
     print("approval: %s" % ("interface, view 5 (%s/#/5)" % service_url()
                             if isinstance(approver, ServiceApprover) else "console"))
     try:
         with open_portal(args.scenario, args.variant, pixel_channel=crops,
                          run_dir=run_dir, headless=not args.headed) as driver:
             out = loop.run(driver, agent, supervised=supervised, approver=approver,
-                           sink=_Tee(run_dir / "events.jsonl", default_sink()),
+                           sink=sink,
                            sensitive=SamButtons(meta.segment, read=pixels.read_label), max_steps=args.max_steps,
                            run_dir=run_dir)
     finally:
@@ -194,7 +207,33 @@ def main(argv=None):
     (run_dir / "outcome.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2),
                                           encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.explain:
+        explain_after(out, pixels, sink, run_dir, meta)
     return 0
+
+
+def explain_after(out, pixels, sink, run_dir, meta=None):
+    """--explain: after the run and its outcome.json, never before. Best effort:
+    a failure is said, never raised, and nothing of the run changes."""
+    spent0 = meta.spent_usd() if meta else 0.0
+    try:
+        e = explain.explain_run(out, pixels)
+    except Exception as err:  # noqa: BLE001 - an explanation never breaks a finished run
+        print("explain: failed: %s: %s" % (type(err).__name__, str(err)[:200]))
+        return None
+    if e is None:
+        print("explain: the run saw no frame")
+        return None
+    try:
+        sink.publish(e)
+    except Exception:  # noqa: BLE001 - the interface is best effort
+        pass
+    (run_dir / "explain.json").write_text(json.dumps(
+        {"event": e, "spent_usd": round((meta.spent_usd() if meta else 0.0) - spent0, 4)},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    print("explain: %s · %d code-only, %d pixels-only line(s) (computed after the run)"
+          % (e["status"], len(e["code_only_text"]), len(e["pixels_only_text"])))
+    return e
 
 
 if __name__ == "__main__":

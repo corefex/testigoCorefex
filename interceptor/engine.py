@@ -162,6 +162,31 @@ class Interceptor:
                                 moment=moment,
                                 read={"approved": dict(approved_read), "executed": read}), read
 
+    # -- explanation, after an unsupervised run (observe only) ---------------
+
+    def explain(self, capture):
+        """Read the pixels once and compare them with the page code, never
+        deciding anything: no rule order, no block, no approval. Used by
+        `agent.run --no-supervisor --explain` after the run has ended, to show
+        what TESTIGO+ would have seen (view 3). Returns a dict with the regions,
+        the instruction-like lines on each side and the addresses on screen that
+        the policy does not allow."""
+        t0 = time.perf_counter()
+        regions = self.pixels.read_regions(capture)
+        latency = int(round((time.perf_counter() - t0) * 1000))
+        code_only, pixels_only = self._divergence(capture)
+        by_label = {r["label"]: r for r in regions}
+        policy_reason = ""
+        stray = self._stray_addresses(capture.rendered_lines)
+        if stray:
+            policy_reason = "an address not in the deliver-only list is on screen: %s" % ", ".join(stray)
+        elif "address" in by_label and "amount" in by_label:
+            ok, why = self.policy.check_order(by_label["address"]["text"],
+                                              _amount_from(by_label["amount"]["text"]))
+            policy_reason = "" if ok else why
+        return {"regions": regions, "code_only_text": code_only, "pixels_only_text": pixels_only,
+                "policy_reason": policy_reason, "latency_ms": latency}
+
     # -- helpers ------------------------------------------------------------
 
     def _stray_addresses(self, lines):

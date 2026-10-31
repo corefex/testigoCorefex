@@ -231,7 +231,7 @@ class LiveService:
 
 @unittest.skipIf(_chromium() is None, "playwright not installed")
 class PageTests(unittest.TestCase):
-    """Views 5, 6 and 8 painted from test events in headless Chromium."""
+    """Views 1, 3, 5, 6 and 8 painted from test events in headless Chromium."""
 
     @classmethod
     def setUpClass(cls):
@@ -399,6 +399,96 @@ class PageTests(unittest.TestCase):
                     ev.order_confirmed(4, "Cl. 45 No. 12-30", 120000))
         self.show(3, ".alert.neutral")
         self.assertIn("allowed address", self.text())
+
+    def mandate_env(self, meta):
+        """A throwaway owner key and the fake Voice/Spark for view 1."""
+        from receipts import keys
+        key = self.tmp / "owner.key"
+        keys.load_or_create_seed(key)
+        env = mock.patch.dict(os.environ, {"SIGNING_KEY_PATH": str(key)})
+        env.start()
+        self.addCleanup(env.stop)
+        fake = mock.patch.object(service, "mandate_client", lambda: meta)
+        fake.start()
+        self.addCleanup(fake.stop)
+        from common import config
+        active = config.active_policy_path()
+        self.addCleanup(lambda: active.unlink(missing_ok=True))
+        return active
+
+    def test_view_1_live_mandate_record_draft_sign(self):
+        import hashlib
+        from common import config
+        from tests.test_policy_compile import FakeMeta, with_
+        committed = hashlib.sha256(config.POLICY_PATH.read_bytes()).hexdigest()
+        cien = with_(max_amount_words="cien mil pesos", max_per_order_cop=100000)
+        active = self.mandate_env(FakeMeta(cien, transcript="Solo pide con entrega en la tienda, "
+                                                            "máximo cien mil pesos por pedido"))
+        self.show(1, "#mrec")
+        self.assertIn("Record mandate", self.page.inner_text("#mlive"))
+        self.assertIn("committed demo policy", self.page.inner_text("#policysrc"))
+        # recording: a stand-in microphone (no device in headless Chromium)
+        self.page.evaluate("""() => { navigator.mediaDevices.getUserMedia = async () => {
+            const ctx = new AudioContext(); return ctx.createMediaStreamDestination().stream; }; }""")
+        self.page.click("#mrec")
+        self.page.wait_for_selector("#mstop")
+        self.assertIn("Recording", self.page.inner_text("#mlive"))
+        self.page.evaluate("stopMandate(true)")                     # discarded: back to idle
+        self.page.wait_for_selector("#mrec")
+        # transcribing -> draft, next to the policy in use
+        self.page.evaluate("b64 => sendMandate(b64)", wav_b64())
+        self.page.wait_for_selector("#msign")
+        t = self.page.inner_text("#mlive")
+        for want in ("Draft from your voice", "not signed", "máximo cien mil pesos", "COP 100,000",
+                     "Signed policy in use now", "COP 150,000", "Tienda Doña Marta"):
+            self.assertIn(want, t)
+        self.assertFalse(active.exists())
+        self.page.click("#msign")
+        self.page.wait_for_selector("#mlive .mdone")
+        self.assertIn("Signed and in use", self.page.inner_text("#mlive"))
+        self.assertIn("signed in this interface", self.page.inner_text("#policysrc"))
+        self.assertIn("COP 100,000", self.page.inner_text(".mandate"))
+        self.assertTrue(active.is_file())
+        self.assertEqual(hashlib.sha256(config.POLICY_PATH.read_bytes()).hexdigest(), committed)
+
+    def test_view_1_refused_mandate_changes_nothing(self):
+        from tests.test_policy_compile import GOOD, FakeMeta
+        active = self.mandate_env(FakeMeta(GOOD, transcript="No pidas con entrega en la tienda, "
+                                                            "máximo ciento cincuenta mil pesos"))
+        self.show(1, "#mrec")
+        self.page.evaluate("b64 => sendMandate(b64)", wav_b64())
+        self.page.wait_for_selector("#mlive .mrefused")
+        t = self.page.inner_text("#mlive")
+        self.assertIn("nothing was signed", t)
+        self.assertIn("negative", t)
+        self.assertIn("No pidas con entrega", t)
+        self.assertEqual(self.page.locator("#msign").count(), 0)
+        self.assertFalse(active.exists())
+
+    def test_view_3_zooms_on_the_painted_line_after_the_run(self):
+        import io
+        from PIL import Image
+        from tests.fixtures.captures import INJECT
+        (self.tmp / "r").mkdir(exist_ok=True)
+        buf = io.BytesIO()
+        Image.new("RGB", (1280, 800), "white").save(buf, format="PNG")
+        (self.tmp / "r" / "frame_003.png").write_bytes(buf.getvalue())
+        regions = [ev.region("address", (300, 640, 780, 690), "Tienda Doña Marta · Calle 45 # 12-30", 0.97),
+                   {"label": "divergent text", "box": [120, 40, 900, 70], "text": INJECT, "confidence": None}]
+        self.events(ev.run_started("no_supervisor", "a2"),
+                    ev.frame_captured(3, "f" * 64, image="r/frame_003.png"),
+                    ev.order_confirmed(3, "Bodega Norte · Carrera 80 # 7-15", 120000),
+                    ev.explain_result(3, ev.DIVERGENCE, regions, [], [INJECT], 2100,
+                                      "visible text not in page code", image="r/frame_003.png"))
+        self.show(3, "#explain .zoom")
+        t = self.page.inner_text("#explain")
+        self.assertIn("Computed after the run, for explanation only", t)
+        self.assertIn(INJECT, t)
+        self.assertIn("Text painted on screen", t)
+        self.assertIn("frame_003.png", self.page.get_attribute("#explain .zoom", "style"))
+        self.assertEqual(self.page.locator("#explain .box.diverge").count(), 1)
+        self.assertIn("Order confirmed for delivery to Bodega Norte", self.text())
+        self.assertIn("Explained after the run", self.text())
 
     def test_view_8_counts_from_the_file(self):
         import json

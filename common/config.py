@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# The committed demo policy. Never overwritten by the interface: a mandate
+# recorded and signed live (view 1) goes to ACTIVE_POLICY under RUNS_DIR.
 POLICY_PATH = ROOT / "policy" / "marta.policy.yaml"
+ACTIVE_POLICY = Path("policy") / "active.policy.yaml"     # relative to RUNS_DIR (git-ignored)
 
 # The shop's profile (simulated, R2): where Marta's supplier orders are
 # delivered. The mandate names the shop ("la tienda", "Tienda Doña Marta") but
@@ -94,6 +97,20 @@ def get(name):
 def _root_path(value):
     p = Path(value)
     return p if p.is_absolute() else ROOT / p
+
+
+def active_policy_path():
+    """Where a policy signed from the interface (view 1) is written."""
+    return _root_path(get("RUNS_DIR")) / ACTIVE_POLICY
+
+
+def policy_path():
+    """The policy every consumer enforces and shows: the service (/api/policy,
+    /status), the loop, the bench and `testigo verify`. The one signed live from
+    the interface when present (RUNS_DIR/policy/active.policy.yaml), else the
+    committed policy/marta.policy.yaml."""
+    active = active_policy_path()
+    return active if active.is_file() else POLICY_PATH
 
 
 @dataclass(frozen=True)

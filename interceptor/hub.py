@@ -36,6 +36,8 @@ REQUIRED = {
     "verify.result": {"status": _STR, "approved": _DICT, "executed": _DICT},
     "receipt.signed": {"id": _STR, "signature": _STR},
     "order.confirmed": {"address": _STR, "amount_cop": _NUM},
+    "explain.result": {"status": _STR, "regions": _LIST, "code_only_text": _LIST,
+                       "pixels_only_text": _LIST, "latency_ms": _NUM},
 }
 
 
@@ -57,12 +59,12 @@ def validate(e):
             raise InvalidEvent("%s.%s missing or wrong type" % (e["type"], field))
     if e["type"] == "run.started" and e["mode"] not in MODES:
         raise InvalidEvent("run.started.mode must be one of %s" % (MODES,))
-    if e["type"] == "check.result":
+    if e["type"] in ("check.result", "explain.result"):
         for g in e["regions"]:
             box = g.get("box") if isinstance(g, dict) else None
             if not (isinstance(box, list) and len(box) == 4
                     and all(isinstance(x, (int, float)) for x in box)):
-                raise InvalidEvent("check.result region needs box [x0,y0,x1,y1]")
+                raise InvalidEvent("%s region needs box [x0,y0,x1,y1]" % e["type"])
     return e
 
 

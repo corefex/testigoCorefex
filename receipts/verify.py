@@ -31,7 +31,7 @@ import json
 import re
 from pathlib import Path
 
-from common.config import POLICY_PATH
+from common import config
 from interceptor.policy import load as load_policy
 from .receipt import BLOCKED, CROP_NAMES, compare, norm_read, sha_crop, verify_signature
 
@@ -202,8 +202,10 @@ def _check_executed(receipt, approved, evidence_dir):
 
 
 def verify_receipt(receipt_path, evidence_dir=None,
-                   policy_path=POLICY_PATH, pinned_pubkey=None):
-    """Run the four checks. Raises MalformedReceipt for a receipt of the wrong shape."""
+                   policy_path=None, pinned_pubkey=None):
+    """Run the four checks. Raises MalformedReceipt for a receipt of the wrong shape.
+    `policy_path` None: the active policy (common.config.policy_path)."""
+    policy_path = policy_path or config.policy_path()
     receipt = load_receipt(receipt_path)
     checks = []
 

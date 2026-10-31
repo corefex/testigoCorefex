@@ -51,6 +51,8 @@ Se mide que toda acción propuesta pase por el interceptor: acciones devueltas p
 
 **Sin supervisor** (`--no-supervisor`): los pasos 3 y 4 no están; el agente actúa directo. Es el modo de la vista 3 y del «antes» de WitnessBench. No deja recibo.
 
+**Explicación después de la corrida** (`--no-supervisor --explain`, opcional, 1 nov): cuando la corrida ya terminó y escribió `outcome.json`, el canal de píxeles y la comparación código-píxeles (`Interceptor.explain`) corren **una sola vez** sobre el cuadro en que el agente confirmó (o el último en que actuó, o el último visto) y se emite `explain.result` con las líneas divergentes y las regiones; cada línea pintada se ubica con Spark + SAM (`SamSparkChannel.locate_text`). Solo observa: no bloquea, no cambia el resultado ni `outcome.json` (va a `explain.json`), y si falla solo lo dice. Cuesta una lectura de píxeles. WitnessBench nunca lo usa (`tests/test_explain.py` lo comprueba). Con supervisor se rechaza el flag.
+
 ## 3b. Varias acciones y acción sensible (31 de oct, R3 y R4; R3 aprobado e implementado)
 
 **El bucle no es de una acción.** Wonder necesita varios pasos para hacer el pedido: agregar artículos, ir a revisar, (en A1 y A2, escribir en el campo editable) y confirmar. El bucle repite:

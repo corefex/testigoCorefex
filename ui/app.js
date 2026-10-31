@@ -43,7 +43,7 @@ const ICON = {
 function freshRun() {
   return { mode: null, scenario: null, variant: null, log: [], frames: {}, lastFrame: null,
            check: null, approval: null, granted: null, order: null, verify: null, verifies: [],
-           receipt: null };
+           receipt: null, explain: null };
 }
 const S = {
   conn: "connecting", test: false, current: null,
@@ -52,6 +52,10 @@ const S = {
   policy: null, receipt: null, receiptFor: undefined, verify: null, verifying: false, bench: null,
   // view 5: the approval as the service holds it (/api/approval) and the microphone
   desk: null, deskChecked: false, deskBusy: false, rec: { state: "idle", error: "" },
+  // view 1: a mandate recorded live. idle | starting | recording | transcribing |
+  // draft | refused | signing | signed. The draft lives in the service; the page
+  // only shows it and asks the service to sign exactly that draft.
+  mandate: { state: "idle", draft: null, reason: "", transcript: "", error: "" },
 };
 
 function run() { return S.runs[S.current] || S.runs.supervised; }
@@ -76,6 +80,12 @@ function apply(e, follow) {
     S.runs[e.mode] = r; S.current = e.mode;
     r.log.push(e);
     follow(e.mode === "no_supervisor" ? 3 : 2);
+    return;
+  }
+  if (e.type === "explain.result") {          // after an unsupervised run, observe only
+    const nr = S.runs.no_supervisor;
+    nr.log.push(e); nr.explain = e;
+    if (e.image && !(nr.frames[e.frame] || {}).image) nr.frames[e.frame] = { sha: null, image: e.image };
     return;
   }
   const r = run();
@@ -229,7 +239,8 @@ function shot(r, frame, regions, check) {
     else if (g.confidence < 0.5) cls = "low";
     const style = `left:${x0 / SHOT_W * 100}%;top:${y0 / SHOT_H * 100}%;` +
                   `width:${(x1 - x0) / SHOT_W * 100}%;height:${(y1 - y0) / SHOT_H * 100}%`;
-    return `<div class="box ${cls}" style="${style}"><span>${esc(g.label)} · ${Number(g.confidence).toFixed(2)}</span></div>`;
+    const conf = g.confidence == null ? "" : " · " + Number(g.confidence).toFixed(2);
+    return `<div class="box ${cls}" style="${style}"><span>${esc(g.label)}${conf}</span></div>`;
   }).join("");
   return `<div class="shot">${img}${boxes}</div>`;
 }
@@ -257,6 +268,8 @@ function logLine(e) {
       return review ? [ICON.stop, "bad", "Blocked at review", "order not confirmed: " + diffFields(e).join(", ") + " changed"]
                     : [ICON.stop, "bad", "Mismatch after the click", "flagged for review"];
     }
+    case "explain.result": return [ICON.eye, "info", "Explained after the run",
+      e.status === "none" ? "nothing found" : `${e.status.replace(/_/g, " ")} · ${e.reason || ""}`];
     case "receipt.signed": return isPlaceholder(e.signature)
       ? [ICON.warn, "warn", "Receipt built · not signed yet", e.id]
       : [ICON.seal, "ok", "Receipt signed", e.id];
@@ -282,6 +295,96 @@ function crop(label, image, readText, hash, state, note, readUnder) {
     : `<div><div class="read">${esc(readText || "—")}</div><div class="note">${esc(note || "read from pixels · crop image not in this event")}</div></div>`;
   return `<div class="crop${cls}"><div class="lbl">${esc(label)}</div>` +
          `<div class="px">${px}</div><div class="hash">sha256 ${esc(short(hash))}</div></div>`;
+}
+
+// view 1, live: record -> Voice -> policy/compile.py -> draft -> sign and use
+function ruleList(x) {
+  return `<ul class="mrules">${x.deliver_only.map(d => `<li><span class="k">Deliver only to</span> ${esc(d.name)} <span class="mono">· ${esc(d.address)}</span></li>`).join("")}
+    <li><span class="k">Max per order</span> ${esc(cop(x.max_per_order_cop))}</li>
+    <li><span class="k">Ask before</span> ${esc(String(x.ask_before).replace(/_/g, " "))}</li></ul>`;
+}
+function mandateLive(p) {
+  const m = S.mandate, st = m.state;
+  const chipFor = {
+    idle: chip("off", ICON.mic, "Not recording"),
+    starting: chip("warn", ICON.mic, "Allow the microphone…"),
+    recording: chip("warn", ICON.mic, "Recording…"),
+    transcribing: chip("warn", ICON.pause, "Transcribing and compiling…"),
+    draft: chip("info", ICON.file, "Draft · not signed"),
+    refused: chip("bad", ICON.stop, "Refused · nothing changed"),
+    signing: chip("warn", ICON.pause, "Signing…"),
+    signed: chip("ok", ICON.seal, "Signed · in use"),
+  }[st];
+  const recording = st === "starting" || st === "recording";
+  const busy = recording || st === "transcribing" || st === "signing";
+  const recBtn = recording
+    ? `<button class="btn rec on" id="mstop" type="button">${ICON.dot} ${st === "starting" ? "Cancel" : "Stop"}</button>`
+    : `<button class="btn rec" id="mrec" type="button" ${busy ? "disabled" : ""}>${ICON.mic} ${st === "idle" ? "Record mandate" : "Record again"}</button>`;
+  let body = "";
+  if (st === "draft" || st === "signing") {
+    const d = m.draft;
+    body = `<div class="mcompare">
+        <div class="panel mside draft"><div class="h">Draft from your voice · not signed</div>
+          <div class="q">“${esc(d.transcript)}”</div>${ruleList(d)}
+          <div class="muted small">Address from the shop profile (simulated). ${d.ask_before_said ? "" : "“Ask before” was not said: default."}</div></div>
+        <div class="panel mside"><div class="h">Signed policy in use now</div>
+          <div class="q">“${esc(p.transcript)}”</div>${ruleList(p)}
+          <div class="muted small mono">sha256 ${esc(p.short_sha)}</div></div>
+      </div>
+      <div class="vctl"><button class="passkey" id="msign" type="button" ${st === "signing" ? "disabled" : ""}>${ICON.seal} Sign and use</button>
+        <button class="btn" id="mdiscard" type="button" ${st === "signing" ? "disabled" : ""}>Discard</button>
+        <span class="muted small">Signed with the owner key on this machine; the agent then enforces it.</span></div>`;
+  } else if (st === "refused") {
+    body = `<div class="alert mrefused">${ICON.stop}<div><div class="t">Mandate refused · nothing was signed and the policy did not change</div>
+        <div class="s">${esc(m.reason)}</div>${m.transcript ? `<div class="s">Heard: “${esc(m.transcript)}”</div>` : ""}</div></div>`;
+  } else if (st === "signed") {
+    body = `<div class="notice ok mdone">${ICON.seal}<div><b>Signed and in use.</b> The agent now enforces this policy
+        (sha256 <span class="mono">${esc(p.short_sha)}</span>, ${esc(p.path)}). The committed demo policy is unchanged.</div></div>`;
+  } else if (st === "transcribing") {
+    body = `<div class="transcript wait">Sending to Voice Transcribe, then compiling the rules…</div>`;
+  } else if (recording) {
+    body = `${wave(st === "recording" ? "live" : "idle")}<div class="transcript wait">Say the limits, for example: “Solo pide con entrega en la tienda, máximo ciento cincuenta mil pesos por pedido”.</div>`;
+  }
+  const err = m.error ? `<div class="verr">${ICON.warn}<span>${esc(m.error)}</span></div>` : "";
+  return `<div class="panel mlive" id="mlive"><header><span class="t">${ICON.mic.replace("<svg", '<svg width="16" height="16"')} Say a new mandate</span>
+      <span class="r">${chipFor}</span></header>
+    <div class="body">${body}<div class="vctl">${recBtn}<span class="muted small">Up to ${MAX_REC_S} s · the audio is not kept · a refused mandate changes nothing</span></div>${err}</div></div>`;
+}
+
+// view 3: a zoom on one region of a captured frame, cut by CSS from the frame image
+function zoom(r, frame, box, label) {
+  const f = r.frames[frame] || {};
+  const pad = 10;
+  const x0 = Math.max(0, box[0] - pad), y0 = Math.max(0, box[1] - pad);
+  const x1 = Math.min(SHOT_W, box[2] + pad), y1 = Math.min(SHOT_H, box[3] + pad);
+  const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+  if (!f.image) return `<div class="zoom noimg"><span>No screenshot for frame ${esc(frame)}</span></div>`;
+  const px = w < SHOT_W ? x0 / (SHOT_W - w) * 100 : 0, py = h < SHOT_H ? y0 / (SHOT_H - h) * 100 : 0;
+  const style = `background-image:url('${runUrl(f.image)}');background-size:${SHOT_W / w * 100}% auto;` +
+                `background-position:${px}% ${py}%;aspect-ratio:${w} / ${h}`;
+  return `<div class="zoom" role="img" aria-label="${esc(label)}" style="${style}"></div>`;
+}
+// view 3: what TESTIGO+ would have seen, computed once after the run (agent.run --explain)
+function explainPanel(r) {
+  const x = r.explain;
+  if (!x) return "";
+  const lines = x.regions.filter(g => g.label === "divergent text");
+  const addr = x.regions.find(g => g.label === "address");
+  const targets = lines.length ? lines : (x.status === "policy_violation" && addr ? [addr] : []);
+  const zooms = targets.map(g => `<figure class="zfig">${zoom(r, x.frame, g.box, g.text || g.label)}
+      <figcaption><span class="mono">${esc(g.text || "")}</span><span class="muted small"> · ${g.label === "divergent text" ? "on screen · not in the page code" : "delivery address on screen"}</span></figcaption></figure>`).join("");
+  const hidden = x.code_only_text.map(t => `<div class="line diff">${esc(t)}<span class="tag">in the page code · not on screen</span></div>`).join("");
+  const painted = x.pixels_only_text.filter(t => !lines.some(g => g.text === t))
+    .map(t => `<div class="line diff">${esc(t)}<span class="tag">on screen · not in the page code · not located</span></div>`).join("");
+  const verdict = x.status === "none" ? chip("off", ICON.dot, "Nothing found on this frame")
+    : x.status === "policy_violation" ? chip("bad", ICON.stop, "Would break the policy")
+    : chip("bad", ICON.stop, x.pixels_only_text.length ? "Text painted on screen, not in the page code" : "Hidden text in the page code");
+  return `<div class="panel explain" id="explain"><header><span class="t">${ICON.eye.replace("<svg", '<svg width="16" height="16"')} What the agent was looking at</span>
+      <span>frame ${esc(x.frame)}</span><span class="r">${verdict}</span></header>
+    <div class="xgrid"><div>${shot(r, x.frame, x.regions, null)}</div>
+      <div class="xside">${zooms}${hidden}${painted}${x.reason ? `<div class="why">${esc(x.reason)}</div>` : ""}</div></div>
+    <div class="xcap">${ICON.warn}<span>Computed after the run, for explanation only. During the run the pixel channel did not run,
+      nothing was checked or blocked, and the outcome above is what happened.</span></div></div>`;
 }
 
 // -- views ---------------------------------------------------------------
@@ -326,9 +429,10 @@ const render = {
           <div class="seal${sealOk ? "" : " bad"}">${sealOk ? ICON.seal : ICON.stop}<div>
             <div class="t">${sealOk ? "Signed policy" : "Policy not trusted"}</div>
             <div class="s mono">sha256 ${esc(p.short_sha)} · hash ${p.hash_ok ? "ok" : "MISMATCH"} · ${esc(sigText)} · ${esc(p.signed_by)}</div>
+            <div class="s muted small" id="policysrc">In use: ${esc(p.path || "")}${p.active === "signed_here" ? " · signed in this interface" : " · committed demo policy"}</div>
           </div></div>
         </div>
-      </div>`;
+      </div>${mandateLive(p)}`;
   },
 
   agent() {
@@ -369,7 +473,7 @@ const render = {
         <div class="panel"><header><span class="t">Supplier portal</span>${chip("off", ICON.warn, "No supervisor")}
           <span class="r mono">${r.lastFrame != null ? "frame " + esc(r.lastFrame) : ""}</span></header>${shot(r, r.lastFrame, [])}</div>
         <div class="panel"><header><span class="t">What happened</span></header>${timeline(r)}</div>
-      </div>${alert}`;
+      </div>${alert}${explainPanel(r)}`;
   },
 
   diverge() {
@@ -741,19 +845,32 @@ async function decide(decision) {
 // the service refuses audio over 20 s: stop at 18 s, and trim to that when encoding
 const MAX_REC_S = 18, WAV_RATE = 16000;
 let mic = null;
+// The microphone as raw PCM chunks; shared by view 5 (approval) and view 1 (mandate).
+async function openMic(onTimeout) {
+  const stream = await navigator.mediaDevices.getUserMedia(
+    { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(stream);
+  const node = ctx.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  node.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+  src.connect(node); node.connect(ctx.destination);
+  return { stream, ctx, src, node, chunks, timer: setTimeout(onTimeout, MAX_REC_S * 1000) };
+}
+// Release the microphone; returns the sample rate the chunks were taken at.
+function closeMic(m) {
+  clearTimeout(m.timer);
+  try { m.src.disconnect(); m.node.disconnect(); } catch (e) { /* already closed */ }
+  m.stream.getTracks().forEach(t => t.stop());
+  const rate = m.ctx.sampleRate;
+  m.ctx.close();
+  return rate;
+}
 async function startRecording() {
   if (S.rec.state !== "idle") return;
   S.rec = { state: "starting", error: "" }; draw();     // until the browser hands over the mic
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(
-      { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaStreamSource(stream);
-    const node = ctx.createScriptProcessor(4096, 1, 1);
-    const chunks = [];
-    node.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
-    src.connect(node); node.connect(ctx.destination);
-    mic = { stream, ctx, src, node, chunks, timer: setTimeout(() => stopRecording(false), MAX_REC_S * 1000) };
+    mic = await openMic(() => stopRecording(false));
     if (S.rec.state !== "starting") { stopRecording(true); return; }   // cancelled, or the run decided
     S.rec = { state: "recording", error: "" }; draw();
   } catch (err) {
@@ -766,11 +883,7 @@ async function stopRecording(discard) {
     if (S.rec.state === "starting" || S.rec.state === "recording") { S.rec = { state: "idle", error: "" }; draw(); }
     return;
   }
-  clearTimeout(m.timer);
-  try { m.src.disconnect(); m.node.disconnect(); } catch (e) { /* already closed */ }
-  m.stream.getTracks().forEach(t => t.stop());
-  const rate = m.ctx.sampleRate;
-  m.ctx.close();
+  const rate = closeMic(m);
   if (discard) { S.rec = { state: "idle", error: "" }; draw(); return; }
   const d = deskFor(S.runs.supervised.approval);
   if (!d) { S.rec = { state: "idle", error: "The approval closed before the audio was sent." }; draw(); return; }
@@ -785,6 +898,52 @@ async function stopRecording(discard) {
   }
   draw();
 }
+// -- mandate: voice -> draft -> sign and use (view 1, F1 live) ----------------
+let mmic = null;
+function setMandate(x) { S.mandate = Object.assign({ state: "idle", draft: null, reason: "", transcript: "", error: "" }, x); draw(); }
+async function startMandate() {
+  const st = S.mandate.state;
+  if (["starting", "recording", "transcribing", "signing"].includes(st)) return;
+  setMandate({ state: "starting" });
+  try {
+    mmic = await openMic(() => stopMandate(false));
+    if (S.mandate.state !== "starting") { stopMandate(true); return; }   // cancelled meanwhile
+    setMandate({ state: "recording" });
+  } catch (err) {
+    if (S.mandate.state === "starting") setMandate({ error: "Microphone not available: " + err.message });
+  }
+}
+async function stopMandate(discard) {
+  const m = mmic; mmic = null;
+  if (!m) { if (["starting", "recording"].includes(S.mandate.state)) setMandate({}); return; }
+  const rate = closeMic(m);
+  if (discard) { setMandate({}); return; }
+  setMandate({ state: "transcribing" });
+  await sendMandate(wavBase64(m.chunks, rate));
+}
+// the service transcribes and compiles; a refusal comes back as a normal answer
+async function sendMandate(b64) {
+  try {
+    const got = await getJSON("/api/mandate/draft", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wav_base64: b64 }) });
+    if (got.status === "refused") setMandate({ state: "refused", reason: got.reason, transcript: got.transcript || "" });
+    else setMandate({ state: "draft", draft: got });
+  } catch (err) { setMandate({ error: err.message }); }
+}
+async function signMandate() {
+  const d = S.mandate.draft;
+  if (!d || S.mandate.state !== "draft") return;
+  setMandate({ state: "signing", draft: d });
+  try {
+    const p = await getJSON("/api/mandate/sign", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: d.id }) });
+    S.policy = p;
+    setMandate({ state: "signed" });
+  } catch (err) { setMandate({ state: "draft", draft: d, error: err.message }); }
+}
+
 // Voice Transcribe takes WAV only: 16 kHz mono 16-bit PCM, encoded here.
 function wavBase64(chunks, rate) {
   let n = 0; chunks.forEach(c => { n += c.length; });
@@ -857,6 +1016,8 @@ function draw() {
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   on("vrec", startRecording); on("vstop", () => stopRecording(false));
   on("vapprove", () => decide("approve")); on("vdeny", () => decide("deny"));
+  on("mrec", startMandate); on("mstop", () => stopMandate(false));
+  on("msign", signMandate); on("mdiscard", () => setMandate({}));
 }
 
 // -- live events -------------------------------------------------------------

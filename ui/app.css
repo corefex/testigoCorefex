@@ -328,3 +328,35 @@ p.lede { margin: 0 0 22px; color: var(--muted); font-size: 16px; max-width: 70ch
 
 .keys { position: fixed; right: 16px; bottom: 12px; font-size: 11px; color: var(--faint); }
 .keys kbd { font-family: var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--panel); }
+
+/* -- view 1: a mandate said live ------------------------------------------ */
+.mlive { margin-top: 24px; }
+.mlive .body { padding: 16px 20px 20px; }
+.mcompare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mside { padding: 14px 16px; }
+.mside.draft { border: 2px dashed var(--brand); }
+.mside .h { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.mside .q { font-size: 15px; margin-bottom: 8px; }
+.mrules { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; font-size: 15px; font-weight: 600; }
+.mrules .k { display: inline-block; min-width: 120px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.mrules .mono { font-size: 13px; font-weight: 500; color: var(--muted); }
+.mlive .alert { margin: 0 0 4px; }
+.mlive .passkey { margin-top: 0; width: auto; padding: 12px 20px; }
+
+/* -- view 3: explained after the run -------------------------------------- */
+.explain { margin-top: 24px; }
+.xgrid { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; padding: 16px; }
+.xside { display: grid; gap: 12px; align-content: start; }
+.zfig { margin: 0; }
+.zoom { width: 100%; background-repeat: no-repeat; border: 2px solid var(--bad); border-radius: 6px; background-color: #F1F2F4; }
+.zoom.noimg { display: grid; place-items: center; min-height: 60px; color: var(--faint); font-size: 13px; }
+.zfig figcaption { font-size: 13px; margin-top: 4px; }
+.xcap { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.xcap svg { width: 16px; height: 16px; flex: none; color: var(--warn); }
+@media (max-width: 900px) { .mcompare, .xgrid { grid-template-columns: 1fr; } }
+.notice.ok { background: var(--ok-bg); color: var(--ok); }
+.notice.ok div { color: var(--ink); }
+.mlive .notice { margin-top: 0; }
+.mlive .alert .t { font-size: 18px; }
+.mlive .alert svg { width: 28px; height: 28px; flex: none; }
+.xside .why { color: var(--muted); font-size: 14px; }

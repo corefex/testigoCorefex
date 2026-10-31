@@ -148,8 +148,8 @@ def _parse_deliver_only(raw):
 
 if __name__ == "__main__":
     import sys
-    from common.config import POLICY_PATH
-    p = load(sys.argv[1] if len(sys.argv) > 1 else POLICY_PATH)
+    from common.config import policy_path
+    p = load(sys.argv[1] if len(sys.argv) > 1 else policy_path())
     print("owner        :", p.owner)
     print("deliver_only :", p.deliver_only)
     print("max_cop      :", p.max_per_order_cop)

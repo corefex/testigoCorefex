@@ -91,7 +91,7 @@ Hecho y probado offline (`tests/test_ui.py`, `agent/test_loop.py`); las 9 vistas
 
 - **Transporte (F11-D1).** El loop publica cada evento en un *sink* (`interceptor/sink.py`, `HttpSink` → `POST /events`). El servicio guarda la corrida en memoria (`interceptor/hub.py`) y la reenvía por `WS /ws`: primero el historial (una página que abre tarde lo ve todo) y luego cada evento nuevo. `POST /events` y `/events/reset` solo aceptan conexiones locales. El sink es de mejor esfuerzo: si el servicio está caído, la corrida y el veredicto no cambian (hay prueba).
 - **Interfaz (F11-D2).** `ui/index.html`, `ui/app.css`, `ui/app.js`: HTML, CSS y JS estáticos servidos en `/`, sin build. La vista actual va en la URL (`#/4`); flechas y teclas 0–8 para navegar, `A` para seguir los eventos.
-- **Archivos.** `GET /api/policy` (vista 1), `GET /api/receipt` (el `receipt.json` más reciente bajo `runs/`, o `?path=`), `POST /api/verify` (corre el `testigo verify` real como subproceso y devuelve su salida, criterio 4), `GET /api/bench` (`runs/bench_results.json` o «no disponible», criterio 5), `GET /runs/<ruta>` (solo PNG/JPEG, sin salir de `runs/`).
+- **Archivos.** `GET /api/policy` (vista 1; la política activa, `common.config.policy_path()`), `POST /api/mandate/draft` y `POST /api/mandate/sign` (vista 1 en vivo, F1), `GET /api/receipt` (el `receipt.json` más reciente bajo `runs/`, o `?path=`), `POST /api/verify` (corre el `testigo verify` real como subproceso y devuelve su salida, criterio 4), `GET /api/bench` (`runs/bench_results.json` o «no disponible», criterio 5), `GET /runs/<ruta>` (solo PNG/JPEG, sin salir de `runs/`).
 - **Datos de prueba.** `python -m tests.demos.ui_replay a3 --both` reproduce corridas de los fixtures con `test_data: true`, y la interfaz muestra una franja «Test data — no grabar». No sirve para el video.
 - **Estado (F11-D4).** La página no guarda nada; reconstruye todo desde los eventos. Guarda por separado la corrida sin supervisor (vista 3) y la supervisada (vistas 2, 4–7).
 
@@ -112,6 +112,7 @@ En `interceptor/events.py` (todos opcionales o nuevos, compatibles hacia atrás)
 | --- | --- | --- |
 | `run.started` (`mode`, `scenario`, `variant`) | Separar la corrida sin supervisor de la supervisada | El loop, ya |
 | `order.confirmed` (`address`, `amount_cop`) | Vista 3: el pedido que se confirmó sin supervisor; vista 6: el registro del portal | El loop, ya (desde `driver.last_order`) |
+| `explain.result` (`frame`, `status`, `regions`, `code_only_text`, `pixels_only_text`, `after_run`, `image`) | Vista 3: dónde estaba el texto del ataque, calculado después de la corrida | `agent.run --no-supervisor --explain`, nunca WitnessBench |
 | `frame.captured.image` | La captura detrás de las cajas de SAM (vistas 2–4) | F3: el driver guarda la captura en `runs/` y pone `Capture.image` |
 | `approval.requested.images`, `verify.result.images` | Los recortes PNG de las vistas 5 y 6 | F4/F8: guardar los recortes en `runs/` |
 | `receipt.signed.path` | Qué `receipt.json` muestra la vista 7; sin él, la vista avisa «Not from this run» | F9: escribir el recibo firmado en `runs/` |
@@ -142,6 +143,6 @@ Los valores de arriba son la forma, no resultados. Si el archivo no existe o no 
 
 ### Pendiente
 
-- Vista 1 en vivo (micrófono y Voice) depende de F1 con claves; hoy muestra la transcripción guardada en la política firmada.
-- Vista 3: el zoom sobre el texto escondido necesita una región del canal de píxeles en el modo sin supervisor (decidirlo en F3).
+- Vista 1 en vivo: hecha (1 nov). «Record mandate» → Voice → `policy/compile.py` → borrador junto a la política en uso → «Sign and use» la firma con la llave del dueño y la vuelve la activa (`RUNS_DIR/policy/active.policy.yaml`, F1). Estados: idle, recording, transcribing, draft, refused, signed. Falta probarla con micrófono y claves reales.
+- Vista 3 zoom: hecho (1 nov) con `agent.run --no-supervisor --explain` (F3): `explain.result` trae el cuadro, las regiones y las líneas divergentes; la vista dibuja la caja y un acercamiento (recorte por CSS de la captura) con el aviso «calculado después de la corrida, solo para explicar». El texto escondido en el código (A1) no tiene caja: se muestra la línea. Falta correrlo con modelos reales.
 - Vista 5: el passkey real (WebAuthn) es F7; hoy el botón refleja `approval.granted`.

@@ -25,7 +25,7 @@ confirms the printed rules in the terminal, then the owner key signs.
 
   .venv/bin/python -m policy.compile --stamp     # re-sign policy/marta.policy.yaml
   .venv/bin/python -m policy.compile mandate mandato.wav            # → runs/mandate/
-  .venv/bin/python -m policy.compile mandate mandato.wav --out policy/marta.policy.yaml
+  .venv/bin/python -m policy.compile mandate mandato.wav --out runs/policy/active.policy.yaml
   .venv/bin/python -m policy.compile mandate --text "Solo pide con entrega en la tienda, …"
 """
 
@@ -139,11 +139,15 @@ def compile_mandate(meta, audio_path=None, transcript=None, directory=None, owne
         transcript, ms, seconds = meta.transcribe(str(audio_path))
         info["voice_ms"], info["audio_seconds"] = ms, seconds
     transcript = (transcript or "").strip()
-    if not transcript:
-        raise MandateRefused("empty transcript")
-    data, info["spark_ms"] = extract_rules(meta, transcript)
-    rules = validate_extraction(data, transcript,
-                                shop_directory() if directory is None else directory)
+    try:
+        if not transcript:
+            raise MandateRefused("empty transcript")
+        data, info["spark_ms"] = extract_rules(meta, transcript)
+        rules = validate_extraction(data, transcript,
+                                    shop_directory() if directory is None else directory)
+    except MandateRefused as e:
+        e.transcript = transcript          # what was heard, so a refusal can show it
+        raise
     info["ask_before_said"] = rules["ask_before_said"]
     info["max_amount_words"] = rules["max_amount_words"]
     pol = build_policy_dict(transcript, rules["deliver_only"], rules["max_per_order_cop"],
@@ -394,7 +398,8 @@ def cmd_mandate(args, meta=None, confirm=None):
     print("  signature  ", p.signature[:28], "…")
     print("  valid      ", p.signature_valid(keys.public_from_seed(seed)))
     if not args.out:
-        print("Para que el interceptor la use: --out policy/marta.policy.yaml")
+        print("Para que el interceptor la use: --out %s (o grábala en la vista 1)"
+              % s.runs_dir.joinpath(config.ACTIVE_POLICY))
     return 0
 
 
@@ -409,7 +414,8 @@ def build_parser():
     m.add_argument("audio", nargs="?", help="WAV file of the owner's mandate")
     m.add_argument("--text", help="skip Voice: compile this transcript (Spark still extracts)")
     m.add_argument("--out", help="where to write (default: RUNS_DIR/%s); "
-                                 "pass policy/marta.policy.yaml to replace the demo policy" % DEFAULT_OUT)
+                                 "RUNS_DIR/%s makes it the active policy (common.config.policy_path)"
+                                 % (DEFAULT_OUT, config.ACTIVE_POLICY))
     m.add_argument("--key", default=argparse.SUPPRESS, help="default: SIGNING_KEY_PATH")
     m.add_argument("--yes", action="store_true", help="sign without asking (scripted demo)")
     return ap

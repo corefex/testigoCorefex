@@ -47,8 +47,11 @@ interceptor/
   test_engine.py unit tests
 ```
 
-The policy lives in `policy/marta.policy.yaml`; its sha256 is stamped in and is
-the same hash the receipt and `testigo verify` will use.
+The committed policy lives in `policy/marta.policy.yaml`; one signed live from
+view 1 goes to `runs/policy/active.policy.yaml` and wins while it exists
+(`common.config.policy_path()`, used by the service, the loop, the bench and
+`testigo verify`). Its sha256 is stamped in and is the same hash the receipt and
+`testigo verify` will use.
 
 ## Wiring the real inputs later
 

@@ -9,7 +9,11 @@ Routes
   POST /events/reset forget the stored events before a new recording
   GET  /events       the stored events, as JSON
   WS   /ws           history first, then every new event
-  GET  /api/policy   the signed policy (view 1)
+  GET  /api/policy   the active signed policy (view 1; common.config.policy_path)
+  POST /api/mandate/draft  a WAV of the mandate (base64 in JSON) -> Voice ->
+                     policy/compile.py -> an unsigned draft, or why it was refused
+  POST /api/mandate/sign   {"id"}: sign that draft with the owner key and make it
+                     the active policy (RUNS_DIR/policy/active.policy.yaml)
   GET  /api/receipt  the newest receipt.json under runs/, or ?path= (view 7)
   POST /api/verify   runs the real `testigo verify` on that receipt (view 7)
   GET  /api/bench    runs/bench_results.json, or "not available" (view 8)
@@ -44,6 +48,8 @@ import binascii
 import html
 import io
 import json
+import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -158,7 +164,7 @@ def receipt_path(path):
 def status():
     s = config.settings()
     try:
-        policy = load_policy(config.POLICY_PATH)
+        policy = load_policy(config.policy_path())
         policy_sha = policy.short_sha()
         policy_ok = policy.hash_matches_stored()
     except Exception as e:  # noqa: BLE001
@@ -394,17 +400,152 @@ async def approval_decision(approval_id: str, request: Request):
                  reason if isinstance(reason, str) else "")
 
 
+# -- mandate (F1 live, view 1) ------------------------------------------------
+#
+# The page records the owner saying the mandate, the service transcribes it
+# (Voice) and compiles it with policy/compile.py: the same rules as the
+# `policy.compile mandate` CLI (address from the shop profile, negations,
+# millions refused). The draft stays here; "Sign and use" signs exactly that
+# draft with the owner key and writes it, atomically, to
+# RUNS_DIR/policy/active.policy.yaml, which config.policy_path() then serves to
+# every consumer. The committed policy/marta.policy.yaml is never written. A
+# refused mandate changes nothing.
+
+MAX_MANDATE_SECONDS = MAX_VOICE_SECONDS
+_drafts = {}                       # id -> {"policy": dict, "info": dict}; only the newest is kept
+
+
+def mandate_client():
+    """The Meta client the mandate compiles with (Voice Transcribe + Spark).
+    Tests replace this function; they never call the Meta API."""
+    from common.meta_client import MetaClient
+    return MetaClient()
+
+
+def _policy_label(path):
+    path = Path(path)
+    if path == config.POLICY_PATH:
+        return _rel(path)
+    try:
+        return "runs/" + path.relative_to(config.ROOT / "runs").as_posix()
+    except ValueError:
+        return "RUNS_DIR/" + config.ACTIVE_POLICY.as_posix()
+
+
+def _compile_wav(path):
+    from policy.compile import compile_mandate
+    return compile_mandate(mandate_client(), audio_path=path)
+
+
+def _draft_view(draft_id, pol, info):
+    from interceptor.policy import Policy
+    from policy.compile import describe
+    p = Policy(pol)
+    return {"status": "draft", "id": draft_id, "transcript": p.transcript,
+            "deliver_only": p.deliver_only, "max_per_order_cop": p.max_per_order_cop,
+            "ask_before": p.ask_before, "ask_before_said": bool(info.get("ask_before_said")),
+            "max_amount_words": info.get("max_amount_words", ""),
+            "voice_ms": info.get("voice_ms"), "spark_ms": info.get("spark_ms"),
+            "describe": describe(pol, info)}
+
+
+@app.post("/api/mandate/draft")
+async def mandate_draft(request: Request):
+    """A WAV of the owner saying the mandate (base64 in JSON) -> a compiled,
+    unsigned draft, or the reason it was refused. Nothing is signed here."""
+    from common.meta_client import NotConfigured, SpendCapExceeded
+    from policy.compile import MandateRefused
+    local_only(request)
+    body = await json_body(request, MAX_VOICE_BYTES)
+    b64 = body.get("wav_base64")
+    if not isinstance(b64, str) or not b64:
+        raise HTTPException(422, "wav_base64 (the audio, base64) is required")
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "wav_base64 is not valid base64")
+    check_wav(data)
+    with tempfile.TemporaryDirectory(prefix="testigo-mandate-") as tmp:
+        path = Path(tmp) / "mandate.wav"
+        path.write_bytes(data)
+        try:
+            pol, info = await run_in_threadpool(_compile_wav, path)
+        except MandateRefused as e:
+            _drafts.clear()
+            return {"status": "refused", "reason": str(e),
+                    "transcript": getattr(e, "transcript", None)}
+        except (NotConfigured, SpendCapExceeded) as e:
+            raise HTTPException(503, "Voice/Spark not available: %s" % type(e).__name__)
+        except Exception as e:  # noqa: BLE001 - say so on the page; nothing is signed
+            raise HTTPException(502, "Voice or Spark failed: %s" % type(e).__name__)
+    draft_id = secrets.token_hex(8)
+    _drafts.clear()
+    _drafts[draft_id] = {"policy": pol, "info": info}
+    return _draft_view(draft_id, pol, info)
+
+
+def write_active_policy(signed):
+    """Write the signed policy to RUNS_DIR/policy/active.policy.yaml atomically
+    (a temporary file in the same folder, then os.replace), and check what is on
+    disk before anyone reads it."""
+    from policy.compile import HEADER, to_yaml
+    dest = config.active_policy_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".active-", suffix=".yaml", dir=dest.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(HEADER + to_yaml(signed))
+            f.flush()
+            os.fsync(f.fileno())
+        again = load_policy(tmp)
+        if not again.hash_matches_stored() or again.signature != signed.get("signature"):
+            raise HTTPException(500, "the signed policy did not round-trip; nothing changed")
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return dest
+
+
+@app.post("/api/mandate/sign")
+async def mandate_sign(request: Request):
+    """Sign the server's draft (never rules sent by the page) with the owner key
+    and make it the active policy."""
+    from policy.compile import sign_policy_dict
+    from receipts import keys
+    local_only(request)
+    body = await json_body(request, MAX_JSON_BYTES)
+    draft = _drafts.pop(body.get("id"), None) if isinstance(body.get("id"), str) else None
+    if draft is None:
+        raise HTTPException(409, "no such draft: record the mandate again")
+    key_path = config.settings().signing_key_path
+    if not key_path.is_file():
+        _drafts[body["id"]] = draft            # nothing changed; the owner can retry after keygen
+        raise HTTPException(409, "the owner key is not on this machine (run: testigo keygen)")
+    seed = keys.load_seed(key_path)
+    signed, _ = sign_policy_dict(draft["policy"], seed)
+    dest = await run_in_threadpool(write_active_policy, signed)
+    return dict(policy_view(load_policy(dest), dest), status="signed")
+
+
 # -- files the views read ---------------------------------------------------
 
 @app.get("/api/policy")
 def api_policy():
+    path = config.policy_path()
+    return policy_view(load_policy(path), path)
+
+
+def policy_view(policy, path):
+    """The policy as view 1 shows it. Never any key material."""
     s = config.settings()
-    policy = load_policy(config.POLICY_PATH)
     sig_valid = None   # unknown without the owner's key on this machine
     if s.signing_key_path.is_file():
         from receipts import keys
         sig_valid = policy.signature_valid(keys.public_from_seed(keys.load_seed(s.signing_key_path)))
     return {
+        "active": "committed" if Path(path) == config.POLICY_PATH else "signed_here",
+        "path": _policy_label(path),
         "owner": policy.owner,
         "source": policy.source,
         "transcript": policy.transcript,

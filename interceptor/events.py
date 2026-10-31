@@ -14,6 +14,9 @@ Event types:
   verify.result       the after-the-click comparison (match|mismatch)
   receipt.signed      the signed receipt was written
   order.confirmed     what the portal recorded as confirmed (both modes; view 3)
+  explain.result      after an unsupervised run, opt-in (`agent.run --explain`):
+                      the pixel channel and the code-vs-pixels comparison run
+                      once on the confirming frame, observe only (view 3)
 
 Optional fields added by F11 (absent until the producer has them):
   frame.captured.image        screenshot path, relative to runs/
@@ -42,7 +45,7 @@ MISMATCH = "mismatch"
 TYPES = frozenset({
     "run.started", "agent.step", "frame.captured", "check.result",
     "approval.requested", "approval.granted", "verify.result",
-    "receipt.signed", "order.confirmed",
+    "receipt.signed", "order.confirmed", "explain.result",
 })
 
 
@@ -148,3 +151,18 @@ def region(label, box, text, confidence):
     """One SAM region as it appears in check.result.regions."""
     return {"label": label, "box": list(box), "text": text,
             "confidence": round(float(confidence), 2)}
+
+
+def explain_result(frame, status, regions, code_only_text, pixels_only_text, latency_ms,
+                   reason="", image=None, ts=None):
+    """After an unsupervised run (view 3), for explanation only: what the pixel
+    channel and the comparison would have said on the frame where the agent
+    confirmed. `status` is "divergence", "policy_violation" or "none". It never
+    blocked anything and never changes the run's outcome: `after_run` says so.
+    Regions labelled "divergent text" box the instruction-like lines."""
+    e = {"type": "explain.result", "frame": frame, "ts": _ts(ts), "after_run": True,
+         "status": status, "regions": regions, "code_only_text": code_only_text,
+         "pixels_only_text": pixels_only_text, "latency_ms": latency_ms, "reason": reason}
+    if image:
+        e["image"] = image
+    return e

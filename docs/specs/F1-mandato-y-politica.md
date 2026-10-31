@@ -111,17 +111,25 @@ Hecha la compilación por voz real en `policy/compile.py` (subcomando `mandate`)
 4. **Dirección atada por nombre (F1-D2).** La dirección sale del perfil de la tienda en la configuración (simulado). Un destino que no está en el perfil se rechaza; una dirección dicha que no coincide con la del perfil se rechaza. Siguen valiendo las negaciones y el rechazo de millones.
 5. **Preguntar antes.** `ask_before` queda siempre en `new_address` (por defecto seguro, criterio 1); si la dueña no lo dijo, la salida lo marca «por defecto».
 6. **Confirmación y firma.** Se imprimen la transcripción y las tres reglas; la dueña confirma en la terminal (`[s/N]`, o `--yes` en una demo guionada) en lugar del passkey (R8). Luego se estampa el `sha256` y se firma con Ed25519 con la llave del dueño (`SIGNING_KEY_PATH`). `signed_by` queda `owner-key:marta`.
-7. **Dónde queda.** Por defecto en `runs/mandate/marta.policy.yaml` (ignorado por git), para no pisar la política de la demo. Para que el interceptor la use hay que pedirlo con `--out policy/marta.policy.yaml`.
+7. **Dónde queda.** Por defecto en `runs/mandate/marta.policy.yaml` (ignorado por git), para no pisar la política de la demo. Para que el interceptor la use: `--out runs/policy/active.policy.yaml` (ver «Política activa» abajo).
 
 Para correrlo en vivo (necesita `.env` con `META_API_BASE_URL`, `META_API_KEY`, `META_MODEL_VOICE` y `META_MODEL_SPARK`):
 
 ```sh
 sh scripts/make_mandate_wav.sh /tmp/mandato.wav      # macOS: voz Paulina → WAV 16 kHz mono
 .venv/bin/python -m policy.compile mandate /tmp/mandato.wav
-.venv/bin/python -m policy.compile mandate /tmp/mandato.wav --out policy/marta.policy.yaml   # reemplaza la de la demo
+.venv/bin/python -m policy.compile mandate /tmp/mandato.wav --out runs/policy/active.policy.yaml   # la vuelve la activa
 .venv/bin/python -m policy.compile mandate --text "Solo pide con entrega en la tienda, máximo ciento cincuenta mil pesos por pedido"   # sin Voice
 ```
 
 Pruebas sin red en `tests/test_policy_compile.py` con un cliente falso: rechazo por esquema, dirección atada, destino desconocido o no dicho, monto releído, hash estampado y firma válida, nada escrito si no se confirma. El audio no se guarda en el repositorio.
 
-Falta: los eventos de la vista 1 (escuchando, transcribiendo, firmada) y la grabación desde el micrófono del navegador (F11); el criterio 6 (95 % exacto, menos de 1,5 s) se mide en el gate, no aquí; probarlo en vivo con las claves.
+### Mandato en vivo desde la vista 1 (1 nov)
+
+- **Grabar.** «Record mandate» en la vista 1 graba el micrófono del navegador (el mismo grabador WAV de la vista 5) y lo envía a `POST /api/mandate/draft` (JSON con el WAV en base64). El servicio transcribe con Voice (`common/meta_client.transcribe`) y compila con `policy/compile.compile_mandate`: las mismas reglas que el CLI (dirección del perfil de la tienda, negaciones, rechazo de millones). Devuelve el borrador sin firmar, o el motivo del rechazo y lo que oyó. Un rechazo no cambia nada.
+- **Firmar y usar.** `POST /api/mandate/sign` con el `id` del borrador firma exactamente ese borrador guardado en el servicio (la página no puede mandar reglas propias) con la llave del dueño (`SIGNING_KEY_PATH`; si no está, 409 y no se crea). La llave nunca sale del servicio.
+- **Política activa.** `common.config.policy_path()` es la única resolución: `RUNS_DIR/policy/active.policy.yaml` si existe, si no la `policy/marta.policy.yaml` del repo. La usan el servicio (`/api/policy`, `/status`), el bucle (y por él WitnessBench) y `testigo verify`. El servicio la escribe de forma atómica (archivo temporal en la misma carpeta, revisa hash y firma, `os.replace`). La del repo nunca se escribe desde la interfaz; para volver a ella basta borrar la activa. Ojo: un recibo firmado con otra política falla el paso 1 de `verify` contra la activa (`--policy` elige otra).
+- **Protecciones.** Las mismas de la aprobación: solo Host local, solo el Origin del servicio, cuerpo JSON con tope de tamaño, WAV mono PCM de 0,3 a 20 s, audio en un archivo temporal que se borra.
+- **Pruebas.** `tests/test_mandate_live.py` (cliente falso: borrador, rechazos, protecciones, firma que la vuelve activa, la del repo intacta, resolución) y `tests/test_ui.py` (estados de la vista 1 en Chromium).
+
+Falta: el criterio 6 (95 % exacto, menos de 1,5 s) se mide en el gate, no aquí; probarlo en vivo con las claves.

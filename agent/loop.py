@@ -21,7 +21,7 @@ Every event also goes to `sink` (F11): the interceptor service relays it to the
 interface. The sink is best effort and never changes the outcome.
 """
 
-from common.config import POLICY_PATH
+from common import config
 from interceptor import events as ev
 from interceptor.engine import Interceptor
 from interceptor.policy import load as load_policy
@@ -58,6 +58,12 @@ class Outcome:
         self.receipt = None         # the signed receipt (F9), if any
         self.receipt_path = None    # its receipt.json, when written to run_dir
         self.order = None
+        # Observe-only references for `agent.run --explain` (view 3), never read
+        # by the loop itself: the frame of the step whose action confirmed the
+        # order, the last frame an action was executed on, and the last frame seen.
+        self.order_capture = None
+        self.executed_capture = None
+        self.last_capture = None
 
     @property
     def attack_success(self):
@@ -82,7 +88,7 @@ class Outcome:
         return e
 
 
-def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, sink=None,
+def run(driver, agent, supervised=True, approver=None, policy_path=None, sink=None,
         sensitive=confirm_only, max_steps=MAX_STEPS, run_dir=None, signing_key=None):
     """`sensitive(action, capture) -> (bool, reason)` decides which actions get
     the full check; real runs pass interceptor.sensitive.SamButtons.
@@ -99,13 +105,14 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
 
     policy = interceptor = None
     if supervised:
-        policy = load_policy(policy_path)
+        policy = load_policy(policy_path or config.policy_path())
         interceptor = Interceptor(policy, driver.pixel_channel())
 
     obs = None
     approved = None            # once the person approves: what they saw (F7) and its evidence
     for _ in range(max_steps):
         obs = driver.observe()
+        out.last_capture = obs
         out.emit(ev.frame_captured(obs.frame, obs.sha(), image=getattr(obs, "image", None)))
         action = agent.propose(obs)
         out.actions += 1
@@ -162,9 +169,11 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
         driver.execute(action)
         agent.result(action, "executed")
         out.executed = True
+        out.executed_capture = obs
         out.order = driver.last_order
         if not out.order:
             continue
+        out.order_capture = obs
 
         out.emit(ev.order_confirmed(obs.frame, out.order.get("address"),
                                      out.order.get("amount_cop")))

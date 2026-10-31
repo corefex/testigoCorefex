@@ -172,15 +172,16 @@ class SamSparkChannel(PixelChannel):
             out.append({"label": "pay button", "box": best["box"], "text": "",
                         "confidence": best.get("confidence") or 0.0})
 
-        # Review of F4: SAM must refine the SAME element Spark pointed at (most of
-        # SAM's box inside the rough box), never a union of two places; and the
+        # Review of F4: SAM must refine the SAME element Spark pointed at (the
+        # centre of SAM's box inside Spark's rough box, with the margin SAM was
+        # given; Spark's boxes are rough), never a union of two places; and the
         # crop, read alone, must say what the first pass said. Otherwise the
         # region gets no confidence and the engine blocks (cannot_verify).
         from receipts.receipt import norm_read
         crops = {}
         for label, sam in boxes.items():
             rough = clamp(screen[label]["box"], w, h)
-            if sam is None or inside(sam["box"], rough) < 0.6:
+            if sam is None or not centered_in(sam["box"], rough, margin=8):
                 continue
             # the recipient crop keeps Spark's box: it holds the name and the account
             box = sam["box"] if label == "amount" else rough
@@ -293,6 +294,12 @@ def clamp(box, w, h):
 
 def union(a, b):
     return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+
+
+def centered_in(a, b, margin=0):
+    """The centre of box a lies inside box b grown by `margin` pixels."""
+    cx, cy = (a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0
+    return b[0] - margin <= cx <= b[2] + margin and b[1] - margin <= cy <= b[3] + margin
 
 
 def inside(a, b):

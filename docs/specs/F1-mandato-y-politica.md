@@ -98,3 +98,28 @@ El compilador por voz es código nuevo (propuesta: `policy/compile.py`), con Voi
 1. **F6.** Atar la cuenta (F1-D2) cierra el hueco 1 de F0: un ataque que cambie la cuenta pero deje el nombre ya no cumple la regla 3. F6 debe exigir que coincidan nombre y cuenta leídos de los píxeles.
 2. **F9.** La firma de la política y la de los recibos usan el mismo par de llaves (`receipts/keys.py`); conviene un solo camino de firma.
 3. **F7.** El passkey que respalda la política es el mismo que aprueba los pagos; un solo registro de passkey para la demo.
+
+## Implementación (31 de octubre)
+
+Hecha la compilación por voz real en `policy/compile.py` (subcomando `mandate`), con R8 aplicado (Spark por API, sin Glimmer ni passkey).
+
+1. **Voz.** Voice Transcribe sobre un WAV (`common/meta_client.py`, idioma detectado por la API).
+2. **Extracción.** Spark llena un esquema JSON fijo y estricto (`response_format` `json_schema`, `strict`; `reasoning_effort="low"`, `max_tokens=16000`): proveedores (`name`, `account` solo si se dijo), el monto máximo copiado tal como se dijo (`max_amount_words`), ese monto en pesos y si pidió preguntar antes de un destinatario nuevo. La transcripción va como dato entre comillas, nunca como instrucción.
+3. **Validación por código.** Se rechaza (y no se firma nada) todo lo que salga del esquema: llaves de más o de menos, tipos distintos, contenido vacío o no JSON. Además se compara con la transcripción: el nombre del proveedor y las palabras del monto tienen que estar en lo que se dijo (sin tildes ni mayúsculas; «equis» se lee como «x»), y el monto se vuelve a leer por código (`approval/voice_match.spanish_to_int`, también «150 mil» y «150.000»). Si el entero de Spark no coincide con esa lectura, se rechaza.
+4. **Cuenta atada por nombre (F1-D2).** La cuenta sale del directorio de proveedores conocidos (el del banco simulado del portal, `portal/scenarios.ACCOUNT_NAMES`; simulado). Un proveedor que no está en el directorio se rechaza; una cuenta dicha que no coincide con la del directorio se rechaza.
+5. **Preguntar antes.** `ask_before` queda siempre en `new_recipient` (por defecto seguro, criterio 1); si la dueña no lo dijo, la salida lo marca «por defecto».
+6. **Confirmación y firma.** Se imprimen la transcripción y las tres reglas; la dueña confirma en la terminal (`[s/N]`, o `--yes` en una demo guionada) en lugar del passkey (R8). Luego se estampa el `sha256` y se firma con Ed25519 con la llave del dueño (`SIGNING_KEY_PATH`). `signed_by` queda `owner-key:marta`.
+7. **Dónde queda.** Por defecto en `runs/mandate/marta.policy.yaml` (ignorado por git), para no pisar la política de la demo. Para que el interceptor la use hay que pedirlo con `--out policy/marta.policy.yaml`.
+
+Para correrlo en vivo (necesita `.env` con `META_API_BASE_URL`, `META_API_KEY`, `META_MODEL_VOICE` y `META_MODEL_SPARK`):
+
+```sh
+sh scripts/make_mandate_wav.sh /tmp/mandato.wav      # macOS: voz Paulina → WAV 16 kHz mono
+.venv/bin/python -m policy.compile mandate /tmp/mandato.wav
+.venv/bin/python -m policy.compile mandate /tmp/mandato.wav --out policy/marta.policy.yaml   # reemplaza la de la demo
+.venv/bin/python -m policy.compile mandate --text "Solo puedes pagarle a Distribuidora X, máximo ciento cincuenta mil pesos"   # sin Voice
+```
+
+Pruebas sin red en `tests/test_policy_compile.py` con un cliente falso: rechazo por esquema, cuenta atada, proveedor desconocido o no dicho, monto releído, hash estampado y firma válida, nada escrito si no se confirma. El audio no se guarda en el repositorio.
+
+Falta: los eventos de la vista 1 (escuchando, transcribiendo, firmada) y la grabación desde el micrófono del navegador (F11); el criterio 6 (95 % exacto, menos de 1,5 s) se mide en el gate, no aquí; probarlo en vivo con las claves.

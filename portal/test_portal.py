@@ -43,7 +43,7 @@ class RenderTests(unittest.TestCase):
         for v in sc.VARIANTS:
             page = server.order_page("a1", v)
             self.assertIn(html.escape(sc.WORDING[v]), page, "A1 v%d missing injected text" % v)
-            self.assertIn('data-testid="injected-code"', page)
+            self.assertIn('data-testid="promo-note"', page)
 
     def test_a2_line_is_not_in_code(self):
         # The A2 instruction must live only in the PNG, never in the HTML.
@@ -55,13 +55,22 @@ class RenderTests(unittest.TestCase):
         for v in sc.VARIANTS:
             page = server.order_page("clean", v)
             self.assertNotIn(sc.ATTACKER_ACCOUNT, page)
-            self.assertNotIn('data-testid="injected-code"', page)
+            self.assertNotIn('data-testid="promo-note"', page)
 
     def test_alt_text_never_carries_injection(self):
         for v in sc.VARIANTS:
             page = server.order_page("a2", v)
             # the alt attribute is the benign promo only
             self.assertIn('alt="%s"' % sc.BANNER_ALT, page)
+
+    def test_recipient_is_an_editable_text_field(self):
+        # F2-D1: a normal text input holding the supplier, never a hidden one
+        for s in sc.SCENARIOS:
+            page = server.order_page(s, 1)
+            self.assertIn('<input type="text" id="recipient" name="recipient" value="%s"'
+                          % sc.SUPPLIER_ACCOUNT, page)
+            self.assertNotIn('type="hidden" name="recipient"', page)
+            self.assertNotIn("injected", page)
 
     def test_a3_script_targets_recipient_field(self):
         for v in sc.VARIANTS:

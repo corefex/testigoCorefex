@@ -11,15 +11,20 @@ Every call:
 A failure is raised, never swallowed. Callers that decide (the interceptor)
 turn a failure into `cannot_verify`: in doubt, block.
 
-Not yet confirmed (F0 §8, gate g1): how this API takes images, and which
-endpoints serve SAM and Voice Transcribe. Images are sent in the OpenAI
-`image_url` content format and Voice through `audio.transcriptions`; both are
-assumptions that g1 checks. SAM has no OpenAI-SDK equivalent, so `segment()`
-refuses until its endpoint is known (decision D2).
+Endpoints, confirmed against the real API on 31 Oct (gate g1, R5):
+  - Spark and Wonder: Chat Completions (`chat`) and the Responses API
+    (`respond`). Images go as `image_url` (chat) or `input_image` (responses).
+  - SAM 3.1: the Responses API with a noun phrase and one image; boxes come back
+    as text tokens `<|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..|>` (`segment`).
+  - Voice Transcribe: `POST /asr/transcribe`, multipart with a JSON `request`
+    part and a WAV `audio` part (`transcribe`).
+  - The `computer` tool answers on Spark 1.3 but not on Wonder 1.0 with our keys
+    ("Unsupported tool type: 'computer'"); see F3.
 """
 
 import base64
 import json
+import re
 import time
 from pathlib import Path
 
@@ -142,25 +147,51 @@ class MetaClient:
             lambda: client.chat.completions.create(model=model, messages=messages, **kwargs),
             _token_usage, lambda u: _token_cost(tool, u))
 
+    def respond(self, tool, input, **kwargs):
+        """Responses API with Wonder or Spark. Returns (response, latency_ms)."""
+        model = self.model(tool)
+        client = self._client()
+        return self._call(
+            tool, model,
+            lambda: client.responses.create(model=model, input=input, **kwargs),
+            _token_usage, lambda u: _token_cost(tool, u))
+
     def transcribe(self, audio_path, language="es"):
-        """Voice Transcribe (assumed audio.transcriptions endpoint). Returns (text, latency_ms, seconds)."""
+        """Voice Transcribe on a WAV file. Returns (text, latency_ms, seconds).
+
+        The API detects the language itself; `language` is kept for callers."""
         model = self.model("voice")
         client = self._client()
-        seconds = _audio_seconds(audio_path)
+        request = json.dumps({"model": model, "audioEncoding": "WAV", "mode": "PUSH_TO_TALK"})
 
         def fn():
             with open(audio_path, "rb") as f:
-                return client.audio.transcriptions.create(model=model, file=f, language=language)
+                return client.post("/asr/transcribe", cast_to=object, files=[
+                    ("request", (None, request.encode("utf-8"), "application/json")),
+                    ("audio", (Path(audio_path).name, f.read(), "audio/wav"))],
+                    options={"headers": {"Content-Type": "multipart/form-data"}})
 
         resp, ms = self._call("voice", model, fn,
-                              lambda r: {"audio_seconds": seconds},
-                              lambda u: PRICES["voice"]["per_hour"] * u["audio_seconds"] / 3600.0)
-        return getattr(resp, "text", str(resp)), ms, seconds
+                              lambda r: {"audio_seconds": (r.get("audioDurationMs") or 0) / 1000.0},
+                              lambda u: PRICES["voice"]["per_hour"] * int(u["audio_seconds"]) / 3600.0)
+        return resp.get("transcript", ""), ms, (resp.get("audioDurationMs") or 0) / 1000.0
 
     def segment(self, image_png, phrase):
-        """SAM 3.1: boxes for one noun phrase. Refuses until its endpoint is confirmed (D2)."""
-        raise NotConfigured("SAM endpoint not confirmed yet (decision D2): "
-                            "add the call here once the API documentation gives it")
+        """SAM 3.1: boxes for one noun phrase. Returns (boxes, latency_ms).
+
+        Each box is {"box": [x1, y1, x2, y2], "confidence": float or None}, in
+        pixels of the image sent. Masks are not decoded (we only need boxes)."""
+        model = self.model("sam")
+        client = self._client()
+        content = [{"type": "input_text", "text": phrase},
+                   {"type": "input_image", "image_url": png_data_url(image_png)}]
+        resp, ms = self._call(
+            "sam", model,
+            lambda: client.responses.create(model=model, input=[{"role": "user", "content": content}],
+                                            metadata={"include_confidence": "true"}),
+            lambda r: {"images": 1},
+            lambda u: PRICES["sam"]["per_1k_images"] * u["images"] / 1000.0)
+        return parse_sam_boxes(output_text(resp)), ms
 
     def list_models(self):
         resp, _ = self._call("spark", "models.list", lambda: self._client().models.list(),
@@ -168,21 +199,54 @@ class MetaClient:
         return [m.id for m in getattr(resp, "data", [])]
 
 
+def png_data_url(png_bytes):
+    return "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+
+
 def image_content(png_bytes, text=None):
-    """OpenAI-style message content with one PNG (assumed format; checked in g1)."""
-    url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
-    parts = [{"type": "image_url", "image_url": {"url": url}}]
+    """Chat Completions message content with one PNG."""
+    parts = [{"type": "image_url", "image_url": {"url": png_data_url(png_bytes)}}]
     if text:
         parts.insert(0, {"type": "text", "text": text})
     return parts
 
 
+def output_text(resp):
+    """All `output_text` of a Responses API result, joined."""
+    out = []
+    for item in getattr(resp, "output", None) or []:
+        for part in getattr(item, "content", None) or []:
+            if getattr(part, "type", "") == "output_text":
+                out.append(part.text)
+    return "".join(out)
+
+
+_BOX = re.compile(r"<\|box;([^|>]*)\|>")
+
+
+def parse_sam_boxes(text):
+    """Boxes from SAM's text output; a phrase with no match gives []."""
+    boxes = []
+    for m in _BOX.finditer(text or ""):
+        f = dict(kv.split("=", 1) for kv in m.group(1).split(";") if "=" in kv)
+        try:
+            box = [int(float(f[k])) for k in ("x1", "y1", "x2", "y2")]
+        except (KeyError, ValueError):
+            continue
+        boxes.append({"box": box, "confidence": float(f["c"]) if "c" in f else None})
+    return boxes
+
+
 def _token_usage(resp):
+    """Token counts from Chat Completions or the Responses API."""
     u = getattr(resp, "usage", None)
     if u is None:
         return {"prompt_tokens": None, "completion_tokens": None}
-    return {"prompt_tokens": getattr(u, "prompt_tokens", None),
-            "completion_tokens": getattr(u, "completion_tokens", None)}
+    tin = getattr(u, "prompt_tokens", None)
+    tout = getattr(u, "completion_tokens", None)
+    if tin is None and tout is None:
+        tin, tout = getattr(u, "input_tokens", None), getattr(u, "output_tokens", None)
+    return {"prompt_tokens": tin, "completion_tokens": tout}
 
 
 def _token_cost(tool, usage):
@@ -201,13 +265,3 @@ def _is_retryable(e):
                               openai.RateLimitError))
     except ImportError:
         return False
-
-
-def _audio_seconds(path):
-    """Duration of a WAV file; 0 for other formats (cost then logged as 0)."""
-    try:
-        import wave
-        with wave.open(str(path), "rb") as w:
-            return w.getnframes() / float(w.getframerate())
-    except Exception:  # noqa: BLE001
-        return 0.0

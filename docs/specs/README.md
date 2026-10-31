@@ -13,9 +13,9 @@ Specs de cada feature (objetivo, entradas y salidas, criterios de aceptación, q
 
 | Archivo | Feature | Estado |
 | --- | --- | --- |
-| `F0-infraestructura.md` | Estructura del repositorio, instalación, secretos, API de Meta, Playwright, pruebas, gate | Aprobado 28 oct; implementado salvo los scripts del gate |
+| `F0-infraestructura.md` | Estructura del repositorio, instalación, secretos, API de Meta, Playwright, pruebas, gate | Aprobado 28 oct; implementado; del gate solo está g1 (pasa 5/5 contra la API real el 31 oct) |
 | `F1-mandato-y-politica.md` | Mandato por voz y política firmada | Borrador; implementado el núcleo offline (formato con cuenta atada, firma Ed25519, compilación desde texto); falta la compilación por voz real (Voice + Spark, necesita claves) |
-| `F2-portal-y-ataques.md` | Portal simulado y escenarios | Aprobado 28 oct |
+| `F2-portal-y-ataques.md` | Portal simulado y escenarios | Aprobado 28 oct; implementados F2-D1 (destinatario editable) y el `data-testid` neutro de A1; faltan el pago en dos pasos, la revisión y A3 en ella |
 | `F3-agente-y-navegador.md` | Wonder con Playwright, con y sin supervisor | Borrador |
 | `F4-canal-de-pixeles.md` | SAM y Spark sobre la captura | Borrador |
 | `F5-comparacion-codigo-pixeles.md` | Divergencia código/píxeles y el filtro | Borrador; implementado el filtro «parece una instrucción», con el texto oculto legítimo probado |

@@ -110,3 +110,18 @@ Los cambios de 00 y F3 ya están aplicados en este commit de specs; los de F4, F
 - Las rutas exactas de la API de Meta para computer use, SAM y Voice: salen de la documentación citada en la investigación del 31 de oct, pero nadie del equipo las ha llamado todavía.
 - Si SAM 3.1 por API acepta cajas y puntos (R6).
 - El costo real por corrida de Wonder.
+
+## 8. Resultado de g1 (31 oct, tarde)
+
+`python -m gate.g1_api_bogota` contra la API real, con la clave de una persona: **5 de 5**, con un gasto de USD 0,02. Los datos crudos quedan en `runs/gate/2026-10-31/g1/`.
+
+| Modelo | Endpoint confirmado | Resultado |
+| --- | --- | --- |
+| Spark 1.3 | Chat Completions y Responses API; imagen como `image_url` o `input_image` | Lee «COP 120,000» de la captura en 2,5 s |
+| Wonder 1.0 | Responses API | Lee «COP 120,000» en 2,7 s |
+| SAM 3.1 | `/v1/responses`, frase nominal + imagen; las cajas llegan como texto `<|box;x1;y1;x2;y2;w;h|>` y se leen sin `meta-sam-parser` (las máscaras no se decodifican) | Una caja para «pay button» en 1,7 s, sobre el botón real |
+| Voice Transcribe | `POST /v1/asr/transcribe`, multipart con `request` (JSON) y `audio` (WAV) | «ciento veinte mil pesos a distribuidora equis» en 1,6 s |
+
+**Hallazgo que cambia F3:** la herramienta `computer` **no la acepta Wonder** con nuestras claves («Unsupported tool type: 'computer'»), aunque la documentación usa `muse-wonder-1.0` en su guía. Spark 1.3 sí la acepta y devuelve `computer_call`. Wonder sí acepta herramientas `function` (devolvió un `click` con coordenadas). Opciones, a decidir por el equipo: (a) computer use con Spark 1.3; (b) Wonder con herramientas `function` propias (`click`, `type`) sobre la captura; (c) preguntar en Discord si Wonder tiene computer use en el preview. Ninguna se aplica hasta que se decida.
+
+**Otro hallazgo para g3:** en una prueba suelta con la captura de A2 v1, Wonder escribió que ignoraba «the injected recipient change in the ad». Si resiste los ataques, es un resultado que el benchmark debe contar, como ya dice el corte del domingo.

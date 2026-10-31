@@ -9,6 +9,7 @@ tests/fixtures/fake_agent.py and is never used outside tests.
 """
 
 import json
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from urllib.parse import urlsplit
@@ -69,7 +70,9 @@ class PlaywrightDriver(BrowserDriver):
       execute(action)  -> perform the click/type/keys/scroll on the page
       observe_after()  -> re-capture after the action
       last_payment     -> the payment this run made, from the portal's log
-                          (read with SCORER_TOKEN, like the scoring script)
+                          (read with SCORER_TOKEN, like the scoring script),
+                          matched by the portal's opaque run id for the
+                          session cookie this browser holds, never log[-1]
 
     `rendered_lines` stays empty here: what the pixels say is read by the pixel
     channel (F4/F5), never from the DOM.
@@ -83,14 +86,17 @@ class PlaywrightDriver(BrowserDriver):
         self._pixels = pixel_channel
         self.run_dir = run_dir
         self.frame = 0
-        self._payments_before = None
         self._payment = None
+        self._sid = None        # the portal session cookie this browser holds
+        self._runs = []         # run ids of every session this driver opened
 
     def start(self):
-        self._payments_before = len(self._payments())
         self.page.goto("%s/orders/new?scenario=%s&variant=%s"
                        % (self.portal_url, self.scenario, self.variant))
         self.page.wait_for_load_state("networkidle")
+        self._track_run()
+        if not self._runs:
+            raise RuntimeError("the portal did not open a session for this run")
 
     def observe(self):
         self.frame += 1
@@ -141,20 +147,62 @@ class PlaywrightDriver(BrowserDriver):
         return self._payment
 
     def _new_payment(self):
-        log = self._payments()
-        return dict(log[-1]) if len(log) > (self._payments_before or 0) else None
+        # Only this run's payment: the log may hold other runs' (in parallel) and
+        # may have been reset. The portal records one payment per session.
+        self._track_run()
+        mine = [p for p in self._payments() if p.get("run") in self._runs]
+        return dict(mine[-1]) if mine else None
+
+    def _track_run(self):
+        """Learn the run id of the session cookie this browser holds (once per cookie).
+
+        The id never appears in the page or the screenshot: the driver asks the
+        portal for it with SCORER_TOKEN, sending its own cookie value.
+        """
+        sid = _session_cookie(self.page, self.portal_url)
+        if not sid or sid == self._sid:
+            return
+        run = _run_id(self.portal_url, sid)
+        self._sid = sid
+        if run and run not in self._runs:
+            self._runs.append(run)
 
     def _payments(self):
-        # The log is for the scorer only (F2 §6): it needs SCORER_TOKEN, sent as a
-        # bearer header so it never lands in a URL or a log line.
-        token = config.settings().scorer_token
-        if not token:
-            raise RuntimeError("SCORER_TOKEN is empty: run `make setup` to generate it in .env")
-        req = urllib.request.Request(self.portal_url + "/api/payments",
-                                     headers={"Authorization": "Bearer " + token})
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(req, timeout=5) as r:
-            return json.loads(r.read().decode("utf-8"))
+        return _scorer_get(self.portal_url, "/api/payments")
+
+
+SESSION_COOKIE = "dx_session"   # portal/server.py COOKIE
+
+
+def _session_cookie(page, portal_url):
+    for c in page.context.cookies(portal_url):
+        if c.get("name") == SESSION_COOKIE:
+            return c.get("value")
+    return None
+
+
+def _run_id(portal_url, sid):
+    try:
+        return _scorer_get(portal_url, "/api/run",
+                           {"Cookie": "%s=%s" % (SESSION_COOKIE, sid)}).get("run")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:       # the session expired on the portal
+            return None
+        raise
+
+
+def _scorer_get(portal_url, path, headers=None):
+    # The log is for the scorer only (F2 §6): it needs SCORER_TOKEN, sent as a
+    # bearer header so it never lands in a URL or a log line.
+    token = config.settings().scorer_token
+    if not token:
+        raise RuntimeError("SCORER_TOKEN is empty: run `make setup` to generate it in .env")
+    h = {"Authorization": "Bearer " + token}
+    h.update(headers or {})
+    req = urllib.request.Request(portal_url + path, headers=h)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=5) as r:
+        return json.loads(r.read().decode("utf-8"))
 
 
 def _key(k):

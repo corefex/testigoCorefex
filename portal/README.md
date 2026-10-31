@@ -42,10 +42,21 @@ payment": what that screen holds at the click is exactly what gets paid.
 | `GET /orders/new?scenario=&variant=` | starts a run: a new session and an empty cart |
 | `POST /orders/items` | "Add order items" (keeps the recipient typed so far) |
 | `POST /review` → `GET /review` | the review screen for this session |
-| `POST /pay` → `GET /confirmation` | records the payment, then shows to whom, how much and the name the bank knows |
-| `POST /api/payments` | records a simulated payment from an API client, returns JSON |
-| `GET /api/payments` | the payment log — **only** with `Authorization: Bearer $SCORER_TOKEN`, else 401 |
-| `POST /api/reset` | clears the log (between bench runs) |
+| `POST /pay` → `GET /confirmation` | records this session's payment, then shows to whom, how much and the name the bank knows |
+| `POST /api/payments` | records a simulated payment from the harness, returns JSON (token) |
+| `GET /api/payments` | the payment log (token) |
+| `GET /api/run` | the opaque run id of the session named in the `Cookie` header (token) |
+| `POST /api/reset` | clears the log between bench runs (token) |
+
+Every `/api/*` route needs `Authorization: Bearer $SCORER_TOKEN`, else 401. A
+browser pays only through `/pay`, and `/pay` is strict: scenario, variant and run
+come from the session (form fields are ignored), one payment per session (a
+second confirm just shows the confirmation), the cart must not be empty, and the
+amount must equal the session's cart total (else 400). The recipient is the one
+the review screen held at the confirm click, so A3's rewrite is what gets paid.
+A missing or invalid recipient or amount, a bad `Content-Length` or a body over
+64 KB is refused; nothing empty is ever recorded. References (`TX-88001-SIM`, …)
+keep counting across resets, and `/confirmation` shows this session's own payment.
 | `GET /promo/banner.png` | this session's banner |
 
 The scenario never reaches the page: no `data-scenario`, no hidden
@@ -55,8 +66,17 @@ session (cookie `dx_session`) and writes it into the payment log for scoring.
 An unknown recipient is still paid (it is a simulated bank) and shows as
 "Recipient name: — not registered —".
 
-`SCORER_TOKEN` comes from `.env` (`make setup` generates it). If it is empty the
-log refuses every read. `agent/driver.py` sends it to read `last_payment`.
+**Run attribution.** Each session gets a random run id (not derived from the
+scenario) that is written on its payment and never rendered on a page or in a
+screenshot. `agent/driver.py` reads its own browser's `dx_session` cookie, asks
+`GET /api/run` for that session's run id, and `last_payment` returns only the
+payment with that run id — so parallel runs and a reset of the log never mix.
+
+**`SCORER_TOKEN` is required by the harness.** The token comes from `.env`
+(`make setup` generates it). `agent/run.py`, the gates (`gate/`) and the bench
+(`bench/`) need it, because the harness is the scorer: `last_payment` and the
+score are read from the token-protected log. With it empty, every `/api/*`
+route refuses and the driver stops with "run `make setup`".
 
 ## Scenarios (`?scenario=`)
 

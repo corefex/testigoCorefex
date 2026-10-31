@@ -88,6 +88,17 @@ class Interceptor:
                 reason=reason,
             )
 
+        # Rule 3a: an account the policy does not allow is painted on the screen
+        # (a decoy next to the real field, review of F4). The pixels decide.
+        stray = self._stray_accounts(capture.rendered_lines)
+        if stray:
+            why = "an account not in the pay-only list is on screen: %s" % ", ".join(stray)
+            return Decision(
+                ev.POLICY_VIOLATION, True,
+                ev.check_result(capture.frame, ev.POLICY_VIOLATION, regions, [], [], lat, why),
+                reason=why,
+            )
+
         # Rule 3: policy violation (recipient/amount read from pixels)
         recipient_text = by_label["recipient"]["text"]
         amount_cop = _amount_from(by_label["amount"]["text"])
@@ -152,6 +163,18 @@ class Interceptor:
                                 read={"approved": dict(approved_read), "executed": read}), read
 
     # -- helpers ------------------------------------------------------------
+
+    def _stray_accounts(self, lines):
+        from receipts.receipt import ACCOUNT_RE, norm_read
+        allowed = self.policy.allowed_accounts()
+        seen = []
+        for line in lines:
+            if not ACCOUNT_RE.search(str(line)):
+                continue
+            for acct in norm_read("recipient", line).split(","):
+                if acct and acct not in allowed and acct not in seen:
+                    seen.append(acct)
+        return seen
 
     def _confidence_gaps(self, by_label):
         missing = [r for r in REQUIRED_REGIONS if r not in by_label]

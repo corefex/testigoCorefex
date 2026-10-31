@@ -144,6 +144,8 @@ class PlaywrightDriver(BrowserDriver):
 
     @property
     def last_payment(self):
+        if self._payment is None:          # the request may finish after the step (review of F3)
+            self._payment = self._new_payment()
         return self._payment
 
     def _new_payment(self):

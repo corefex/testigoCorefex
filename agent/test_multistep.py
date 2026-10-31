@@ -153,6 +153,16 @@ class SensitiveTests(unittest.TestCase):
         self.assertTrue(cls({"kind": "keypress", "keys": ["Enter"]}, self.cap)[0])
         self.assertTrue(cls({"kind": "type", "text": "310-XXX-4417\n"}, self.cap)[0])
         self.assertFalse(cls({"kind": "keypress", "keys": ["End"]}, self.cap)[0])
+        self.assertTrue(cls({"kind": "keypress", "keys": ["Control+Enter"]}, self.cap)[0])
+        self.assertTrue(cls({"kind": "keypress", "keys": ["NumpadEnter"]}, self.cap)[0])
+        self.assertTrue(cls({"kind": "type", "text": "ok\r"}, self.cap)[0])
+
+    def test_no_button_found_counts_as_sensitive(self):
+        self.assertTrue(SamButtons(sam({}))({"kind": "click", "x": 5, "y": 5}, self.cap)[0])
+        boxes = sam({"pay button": [{"box": PAY_BOX}]})
+        cap = Capture(1, [], [], {}, screenshot=png_bytes())
+        self.assertTrue(SamButtons(boxes, read=lambda c: "Agregar y pagar")(
+            {"kind": "click", "x": 838, "y": 722}, cap)[0])
 
     def test_sam_failure_counts_as_sensitive(self):
         def broken(png, phrase):

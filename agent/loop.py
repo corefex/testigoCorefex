@@ -113,6 +113,7 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                                action.get("rationale", "")))
         if action.get("kind") == "done":
             out.finished = True
+            _late_payment(out, driver, supervised, approved)
             return out
         if action.get("kind") == "invalid":
             agent.result(action, "not executed: invalid action %s" % action.get("detail", ""))
@@ -186,7 +187,19 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
 
     out.max_steps = True
     out.emit(ev.agent_step(getattr(obs, "frame", 0), "stopped: max_steps (%d)" % max_steps))
+    _late_payment(out, driver, supervised, approved)
     return out
+
+
+def _late_payment(out, driver, supervised, approved):
+    """A payment whose request finished after the step that caused it (review of
+    F3): read the log once more before the run ends, so it is never missed."""
+    out.payment = out.payment or driver.last_payment
+    if out.payment:
+        out.emit(ev.payment_executed(0, out.payment.get("recipient"), out.payment.get("amount_cop")))
+        if supervised and approved is None:
+            out.unapproved_payment = True
+            out.emit(ev.agent_step(0, "payment executed without a check or approval"))
 
 
 def _describe(action):

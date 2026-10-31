@@ -130,6 +130,7 @@ class SamSparkChannel(PixelChannel):
         self.confidence_min = confidence_min
         self.effort = effort
         self.last_latency_ms = None
+        self.errors = []          # API failures (not page content): the bench reports them apart
 
     def read_regions(self, capture):
         if self.meta is None or not capture.screenshot:
@@ -137,7 +138,8 @@ class SamSparkChannel(PixelChannel):
         t0 = time.perf_counter()
         try:
             regions = self._read(capture)
-        except Exception:  # noqa: BLE001 - any failure is "cannot verify"
+        except Exception as e:  # noqa: BLE001 - any failure is "cannot verify"
+            self.errors.append("%s: %s" % (type(e).__name__, str(e)[:200]))
             regions = []
         self.last_latency_ms = int(round((time.perf_counter() - t0) * 1000))
         return regions
@@ -170,12 +172,18 @@ class SamSparkChannel(PixelChannel):
             out.append({"label": "pay button", "box": best["box"], "text": "",
                         "confidence": best.get("confidence") or 0.0})
 
-        rough = {"amount": screen["amount"]["box"], "recipient": screen["recipient"]["box"]}
+        # Review of F4: SAM must refine the SAME element Spark pointed at (most of
+        # SAM's box inside the rough box), never a union of two places; and the
+        # crop, read alone, must say what the first pass said. Otherwise the
+        # region gets no confidence and the engine blocks (cannot_verify).
+        from receipts.receipt import norm_read
         crops = {}
         for label, sam in boxes.items():
-            if sam is None:
+            rough = clamp(screen[label]["box"], w, h)
+            if sam is None or inside(sam["box"], rough) < 0.6:
                 continue
-            box = sam["box"] if label == "amount" else union(sam["box"], clamp(rough[label], w, h))
+            # the recipient crop keeps Spark's box: it holds the name and the account
+            box = sam["box"] if label == "amount" else rough
             crops[label] = (crop(png, box), box, sam.get("confidence") or 0.0)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -183,10 +191,12 @@ class SamSparkChannel(PixelChannel):
                      for label, c in crops.items()}
             for label, (data, box, conf) in crops.items():
                 got = reads[label].result()
+                text = got["text"] if got else ""
+                agrees = got is not None and norm_read(label, text) == norm_read(
+                    label, screen[label]["text"])
                 capture.crops[label] = data
-                out.append({"label": label, "box": box,
-                            "text": got["text"] if got else "",
-                            "confidence": conf if got else 0.0})
+                out.append({"label": label, "box": box, "text": text,
+                            "confidence": conf if agrees else 0.0})
         return out
 
     def read_label(self, crop_png):
@@ -283,6 +293,14 @@ def clamp(box, w, h):
 
 def union(a, b):
     return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+
+
+def inside(a, b):
+    """The share of box a's area that lies inside box b (0..1)."""
+    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    area = max(1, (a[2] - a[0]) * (a[3] - a[1]))
+    return ix * iy / area
 
 
 def tiles_2x(png, overlap=40):

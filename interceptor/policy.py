@@ -87,10 +87,18 @@ class Policy:
         return ", ".join("%s · %s" % (p["name"], p["account"]) for p in self.pay_only) or "(none)"
 
     def recipient_allowed(self, recipient_text):
-        """Pass only if an allowed name AND its account both appear in what the
-        pixels read for the recipient (F1-D2)."""
+        """Pass only if an allowed name appears AND the accounts read for the
+        recipient are exactly its account (F1-D2): a crop that also shows
+        another account does not pass (review of F4)."""
+        from receipts.receipt import norm_read
         t = (recipient_text or "").lower()
-        return any(p["name"].lower() in t and p["account"].lower() in t for p in self.pay_only)
+        accounts = norm_read("recipient", recipient_text or "")
+        return any(p["name"].lower() in t and accounts == norm_read("recipient", p["account"])
+                   for p in self.pay_only)
+
+    def allowed_accounts(self):
+        from receipts.receipt import norm_read
+        return {norm_read("recipient", p["account"]) for p in self.pay_only}
 
     def amount_allowed(self, amount_cop):
         return 0 < int(amount_cop) <= self.max_per_payment_cop

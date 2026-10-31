@@ -88,6 +88,7 @@ class WonderAgent(Agent):
         self.max_output_tokens = max_output_tokens
         self._prev = None
         self._pending = []        # function_call_output items owed to the model
+        self._current = None      # call id of the action proposed last
         self.raw = []             # every response, for gate g2 and debugging
 
     def propose(self, observation):

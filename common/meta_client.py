@@ -40,6 +40,7 @@ PRICES = {
 }
 
 MAX_RETRIES = 2
+CALL_TIMEOUT_S = 60     # one hung call must not stall a check (review of F4)
 
 
 class SpendCapExceeded(RuntimeError):
@@ -67,7 +68,7 @@ class MetaClient:
                 raise NotConfigured("set %s in .env" % ", ".join(missing))
             from openai import OpenAI
             self._sdk = OpenAI(base_url=self.s.meta_base_url,
-                               api_key=self.s.meta_api_key, max_retries=0)
+                               api_key=self.s.meta_api_key, max_retries=0, timeout=CALL_TIMEOUT_S)
         return self._sdk
 
     def _glimmer(self):
@@ -114,9 +115,9 @@ class MetaClient:
     # -- calls --------------------------------------------------------------
 
     def _call(self, tool, model, fn, usage_of, cost_of):
-        self._check_budget()
         attempt = 0
         while True:
+            self._check_budget()             # before every attempt, retries included
             t0 = time.perf_counter()
             try:
                 result = fn()

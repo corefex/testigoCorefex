@@ -16,7 +16,7 @@ Specs de cada feature (objetivo, entradas y salidas, criterios de aceptación, q
 | `F0-infraestructura.md` | Estructura del repositorio, instalación, secretos, API de Meta, Playwright, pruebas, gate | Aprobado 28 oct; implementado; del gate solo está g1 (pasa 5/5 contra la API real el 31 oct) |
 | `F1-mandato-y-politica.md` | Mandato por voz y política firmada | Borrador; implementado el núcleo offline (formato con cuenta atada, firma Ed25519, compilación desde texto); falta la compilación por voz real (Voice + Spark, necesita claves) |
 | `F2-portal-y-ataques.md` | Portal simulado y escenarios | Aprobado 28 oct; implementados F2-D1 (destinatario editable) y el `data-testid` neutro de A1; faltan el pago en dos pasos, la revisión y A3 en ella |
-| `F3-agente-y-navegador.md` | Wonder con Playwright, con y sin supervisor | Borrador |
+| `F3-agente-y-navegador.md` | Wonder con Playwright, con y sin supervisor | Borrador; implementados Wonder con herramientas `function` (F3-D5), Playwright real, el bucle de varios pasos con tope de 15 y la acción sensible por la caja de SAM (R4); con supervisor, un clic sensible se bloquea con `cannot_verify` hasta que F4 lea los recortes |
 | `F4-canal-de-pixeles.md` | SAM y Spark sobre la captura | Borrador |
 | `F5-comparacion-codigo-pixeles.md` | Divergencia código/píxeles y el filtro | Borrador; implementado el filtro «parece una instrucción», con el texto oculto legítimo probado |
 | `F6-motor-de-decision.md` | Las reglas de decisión | Borrador; implementado (cuenta atada por F1, divergencia filtrada por F5); falta la latencia medida (F4) |

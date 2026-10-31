@@ -11,6 +11,7 @@ Concreta la fila F3 del spec general: Wonder maneja el portal con un navegador c
 | F3-D1 | Formato de las acciones de computer use de Wonder (punto sin confirmar del spec de construcción; prueba 2 del gate) | Aislarlo en una sola función (`agent/agent.py: parse_action`). El gate g2 guarda las respuestas crudas de Wonder; con ellas se llena esa función. El resto del sistema no depende del formato. | el agente real |
 | F3-D2 | Cómo se garantiza que toda acción pase por el interceptor | El bucle es el único camino del agente al navegador: recibe la acción, la pasa por `check` (F6) y solo entonces la ejecuta en Playwright. Se mide: acciones propuestas = acciones interceptadas (gate g2, 10 de 10). | la invariante |
 | F3-D3 | Qué emite el modo sin supervisor para la vista 3 | El bucle sin supervisor no corre el interceptor, así que no hay `check.result`; la vista 3 lee el pago del registro del portal. El bucle emite `agent.step` y `frame.captured` en ambos modos. | F11 |
+| F3-D5 | Cómo maneja Wonder el navegador, si la API no le acepta la herramienta `computer` (g1, 31 oct) | **Aprobado por Joen Anaya el 31 de oct:** Wonder 1.0 por la Responses API con herramientas `function` propias (`click`, `double_click`, `type_text`, `keypress`, `scroll`, `wait`, `done`), en píxeles de la captura de 1280×800. Una acción por turno; la conversación se encadena con `previous_response_id`. Spark 1.3 solo para desarrollar barato (`--model spark`), nunca en WitnessBench ni en el video. | el agente real |
 | F3-D4 | Cómo entrega el navegador el texto del código de la página (para F5) | De `page.content()` y del árbol de accesibilidad de Playwright, junto con la captura. Es la entrada «código» de la comparación (F5-D3). | F5 |
 
 ## 1. Objetivo
@@ -78,10 +79,11 @@ Para saber si un clic es sensible bastan las cajas de los dos botones protegidos
 
 ## 4. El formato de las acciones de Wonder
 
-- No está confirmado cómo entrega Wonder las acciones de computer use (formato y coordenadas). Es la prueba 2 del gate.
-- Todo lo que depende de ese formato vive en una sola función, `agent/agent.py: parse_action` (F3-D1). El bucle y el interceptor no la conocen.
-- El gate g2 (`gate/_wonder.py`, que escribe el equipo) guarda las respuestas crudas de Wonder; con ellas se llena `parse_action`. Hasta entonces, la función se niega y el gate reporta «pendiente, formato por confirmar».
-- La interceptación no depende de resolver el formato: se cuenta que cada acción devuelta pase por el gancho antes de ejecutarse.
+- **Confirmado el 31 de oct (F3-D5):** Wonder devuelve `function_call` con argumentos JSON. Si la herramienta no dice la escala, Wonder responde en coordenadas de 0 a 1000; por eso cada herramienta dice «pixels of the screenshot, 1280 wide and 800 tall», y con eso devuelve píxeles (838, 722 para «Pay with Nequi»). Una coordenada fuera de la pantalla es una acción `invalid` que nunca se ejecuta.
+- Todo lo que depende de ese formato vive en `agent/agent.py: parse_action` (F3-D1). El bucle y el interceptor no lo conocen.
+- Si Wonder responde sin llamar ninguna herramienta, la acción es `done` con lo que dijo como razón.
+- El gate g2 (`gate/g2_intercept_wonder.py`) guarda las respuestas crudas de Wonder en `runs/gate/<fecha>/g2/` y cuenta que cada acción pase por el gancho antes de ejecutarse.
+- Una corrida real: `.venv/bin/python -m agent.run --scenario clean [--no-supervisor] [--headed]`.
 
 ## 5. El navegador (Playwright)
 

@@ -1,0 +1,111 @@
+"""One real run: Wonder drives the portal in Chromium, with or without TESTIGO+.
+
+  .venv/bin/python -m agent.run --scenario clean [--variant 1] [--no-supervisor] [--headed]
+
+Uses the real Meta API (spend goes to runs/usage.jsonl). If the portal is not
+up on PORTAL_PORT, one is started in this process. Every event goes to the
+interceptor service for the interface (best effort) and to
+runs/<date>/<run>/events.jsonl; screenshots, Wonder's raw answers and a summary
+(outcome.json) land next to them.
+
+Supervised runs classify clicks with SAM (R4). The full pixel check (SAM boxes
+read by Spark, F4/F5) is not wired yet, so a sensitive click is blocked with
+cannot_verify: in doubt, block. That is the honest state until F4.
+"""
+
+import argparse
+import json
+import threading
+import urllib.request
+from http.server import ThreadingHTTPServer
+
+from common import clock, config, meta_client
+from interceptor.channels import SamSparkChannel
+from interceptor.sensitive import SamButtons
+from interceptor.sink import default_sink
+
+from . import loop
+from .agent import WonderAgent
+from .driver import open_portal
+
+
+class _Tee:
+    """Events to the interface and to a file."""
+
+    def __init__(self, path, sink):
+        self.path, self.sink = path, sink
+
+    def publish(self, e):
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        self.sink.publish(e)
+
+
+def portal_up(url):
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url + "/api/payments", timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def start_portal():
+    from portal.server import Handler
+    s = config.settings()
+    httpd = ThreadingHTTPServer((s.portal_host, s.portal_port), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--scenario", default="clean", choices=("clean", "a1", "a2", "a3"))
+    ap.add_argument("--variant", type=int, default=1, choices=range(1, 6))
+    ap.add_argument("--no-supervisor", action="store_true")
+    ap.add_argument("--headed", action="store_true", help="show the browser (for recording)")
+    ap.add_argument("--max-steps", type=int, default=loop.MAX_STEPS)
+    ap.add_argument("--model", default="wonder", choices=("wonder", "spark"),
+                    help="spark only to develop cheaply; WitnessBench and the video use wonder")
+    args = ap.parse_args(argv)
+
+    s = config.settings()
+    httpd = None if portal_up(s.portal_url) else start_portal()
+    supervised = not args.no_supervisor
+    run_id = "%s_%s_v%d_%s" % (clock.now().strftime("%H%M%S"), args.scenario, args.variant,
+                               "sup" if supervised else "nosup")
+    run_dir = s.runs_dir / clock.today() / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    meta = meta_client.MetaClient()
+    agent = WonderAgent(meta, tool=args.model)
+    spent0 = meta.spent_usd()
+    try:
+        with open_portal(args.scenario, args.variant, pixel_channel=SamSparkChannel(),
+                         run_dir=run_dir, headless=not args.headed) as driver:
+            out = loop.run(driver, agent, supervised=supervised,
+                           sink=_Tee(run_dir / "events.jsonl", default_sink()),
+                           sensitive=SamButtons(meta.segment), max_steps=args.max_steps)
+    finally:
+        (run_dir / "agent_raw.json").write_text(
+            json.dumps(agent.raw, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        if httpd:
+            httpd.shutdown()
+
+    summary = {
+        "run": run_id, "model": meta.model(args.model), "mode": out.mode,
+        "scenario": args.scenario, "variant": args.variant,
+        "actions": out.actions, "intercepted": out.intercepted, "checked": out.checked,
+        "finished": out.finished, "max_steps": out.max_steps, "blocked": out.blocked,
+        "payment": out.payment, "attack_success": out.attack_success,
+        "spent_usd": round(meta.spent_usd() - spent0, 4),
+        "steps": [e["label"] for e in out.events if e["type"] == "agent.step"],
+    }
+    (run_dir / "outcome.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2),
+                                          encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

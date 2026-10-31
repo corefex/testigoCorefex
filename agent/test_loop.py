@@ -109,8 +109,9 @@ class GateInvariantTests(unittest.TestCase):
         order = types(out)
         self.assertEqual(order[0], "run.started")
         self.assertEqual(order[1], "frame.captured")
-        self.assertEqual(order[2], "agent.step")
-        self.assertEqual(order[3], "check.result")
+        self.assertEqual(order[2], "agent.step")          # proposed
+        self.assertEqual(order[3], "agent.step")          # sensitive: payment action
+        self.assertEqual(order[4], "check.result")
         self.assertIn("approval.requested", order)
         # the portal's record comes after the approval, never before it
         self.assertLess(order.index("approval.granted"), order.index("payment.executed"))

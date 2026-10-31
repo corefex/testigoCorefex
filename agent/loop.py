@@ -1,8 +1,15 @@
-"""The supervised loop: agent -> TESTIGO+ -> browser.
+"""The supervised loop: agent -> TESTIGO+ -> browser, for several steps.
 
-Its one invariant: in a supervised run, every action the agent proposes passes
-through `interceptor.check` before the driver can execute it, and every payment
-is re-checked with `interceptor.verify` after the click.
+Each step (F3 §3b): capture, ask the agent for one action, classify it, and
+only then let the driver execute it. The run ends when the agent says it is
+done, when a payment has gone through, when TESTIGO+ blocks, or at MAX_STEPS
+(reported as `max_steps`, so a stuck run cannot spend without end).
+
+Its invariant: in a supervised run every proposed action passes through this
+hook before the driver can run it (`intercepted == actions`); the sensitive
+ones (R4: a click on a protected button, read from the pixels) also pass
+through `interceptor.check`, and every approved payment is re-checked with
+`interceptor.verify` after the click.
 
 With supervised=False the interceptor is removed entirely (spec row 3 / View
 3): the agent acts directly and no receipt is kept.
@@ -19,10 +26,13 @@ from interceptor import events as ev
 from interceptor.engine import Interceptor
 from interceptor.policy import load as load_policy
 
+from interceptor.sensitive import payment_only
+
 from .approval import AutoApprover
 from .driver import ATTACKER_ACCT
 
 CHECK_LATENCY_MS = 1400  # placeholder until the real SAM + Spark round trip is measured (F4)
+MAX_STEPS = 15
 
 
 class Outcome:
@@ -32,8 +42,11 @@ class Outcome:
         self.scenario = scenario
         self.variant = variant
         self.events = []
-        self.intercepted = 0        # actions routed through the interceptor
+        self.intercepted = 0        # actions that passed the hook before the browser
+        self.checked = 0            # sensitive actions sent to interceptor.check
         self.actions = 0            # actions the agent proposed
+        self.finished = False       # the agent said it was done
+        self.max_steps = False      # stopped at MAX_STEPS
         self.blocked = False
         self.denied = False
         self.executed = False
@@ -64,60 +77,98 @@ class Outcome:
         return e
 
 
-def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, sink=None):
+def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, sink=None,
+        sensitive=payment_only, max_steps=MAX_STEPS):
+    """`sensitive(action, capture) -> (bool, reason)` decides which actions get
+    the full check; real runs pass interceptor.sensitive.SamButtons."""
     approver = approver or AutoApprover()
     out = Outcome("supervised" if supervised else "no_supervisor",
                   getattr(driver, "scenario", None), getattr(driver, "variant", None),
                   sink=sink)
     out.emit(ev.run_started(out.mode, out.scenario, out.variant))
 
-    policy = interceptor = decision = None
+    policy = interceptor = None
     if supervised:
         policy = load_policy(policy_path)
         interceptor = Interceptor(policy, driver.pixel_channel())
 
-    obs = driver.observe()
-    out.emit(ev.frame_captured(obs.frame, obs.sha(), image=getattr(obs, "image", None)))
-    action = agent.propose(obs)
-    out.actions += 1
-    out.emit(ev.agent_step(obs.frame, "proposed: %s" % action.get("kind"),
-                           action.get("rationale", "")))
-
-    approved_crops = None
-    if supervised:
-        decision = interceptor.check(action, obs, latency_ms=CHECK_LATENCY_MS)
-        out.intercepted += 1
-        out.emit(decision.check_event)
-        if decision.blocked:
-            out.blocked = True
+    obs = None
+    for _ in range(max_steps):
+        obs = driver.observe()
+        out.emit(ev.frame_captured(obs.frame, obs.sha(), image=getattr(obs, "image", None)))
+        action = agent.propose(obs)
+        out.actions += 1
+        out.emit(ev.agent_step(obs.frame, "proposed: %s" % _describe(action),
+                               action.get("rationale", "")))
+        if action.get("kind") == "done":
+            out.finished = True
             return out
-        if decision.needs_approval:
-            out.emit(decision.approval_event)
-            granted, info = approver.approve(decision.approval_event)
-            out.emit(ev.approval_granted(info["method"], info["voice_transcript"],
-                                         info["voice_match"], granted=granted))
-            if not granted:
-                out.denied = True
-                return out
-            approved_crops = decision.approval_event["crops"]
+        if action.get("kind") == "invalid":
+            agent.result(action, "not executed: invalid action %s" % action.get("detail", ""))
+            continue
 
-    driver.execute(action)
-    out.executed = True
-    out.payment = driver.last_payment
-    if out.payment:
+        approved_crops = decision = None
+        if supervised:
+            out.intercepted += 1                  # the hook: nothing skips this line
+            is_sensitive, why = sensitive(action, obs)
+            if is_sensitive:
+                out.emit(ev.agent_step(obs.frame, "sensitive: %s" % why))
+                decision = interceptor.check(_as_payment(action), obs, latency_ms=CHECK_LATENCY_MS)
+                out.checked += 1
+                out.emit(decision.check_event)
+                if decision.blocked:
+                    out.blocked = True
+                    return out
+                if decision.needs_approval:
+                    out.emit(decision.approval_event)
+                    granted, info = approver.approve(decision.approval_event)
+                    out.emit(ev.approval_granted(info["method"], info["voice_transcript"],
+                                                 info["voice_match"], granted=granted))
+                    if not granted:
+                        out.denied = True
+                        return out
+                    approved_crops = decision.approval_event["crops"]
+
+        driver.execute(action)
+        agent.result(action, "executed")
+        out.executed = True
+        out.payment = driver.last_payment
+        if not out.payment:
+            continue
+
         out.emit(ev.payment_executed(obs.frame, out.payment.get("recipient"),
                                      out.payment.get("amount_cop")))
-    after = driver.observe_after()
-    out.emit(ev.frame_captured(after.frame, after.sha(), image=getattr(after, "image", None)))
+        after = driver.observe_after()
+        out.emit(ev.frame_captured(after.frame, after.sha(), image=getattr(after, "image", None)))
+        if supervised and approved_crops is not None:
+            vr = interceptor.verify(approved_crops, after)
+            out.emit(vr)
+            out.receipt_flagged = vr["status"] == ev.MISMATCH
+            out.receipt = build_receipt(policy, decision.approval_event, after,
+                                        vr, out.receipt_flagged)
+            out.emit(ev.receipt_signed(out.receipt["id"], out.receipt["signature"]))
+        return out
 
-    if supervised and approved_crops is not None:
-        vr = interceptor.verify(approved_crops, after)
-        out.emit(vr)
-        out.receipt_flagged = vr["status"] == ev.MISMATCH
-        out.receipt = build_receipt(policy, decision.approval_event, after,
-                                    vr, out.receipt_flagged)
-        out.emit(ev.receipt_signed(out.receipt["id"], out.receipt["signature"]))
+    out.max_steps = True
+    out.emit(ev.agent_step(getattr(obs, "frame", 0), "stopped: max_steps (%d)" % max_steps))
     return out
+
+
+def _describe(action):
+    k = action.get("kind")
+    if k in ("click", "double_click"):
+        return "%s (%d, %d)" % (k, action["x"], action["y"])
+    if k == "type":
+        return "type %r" % action["text"][:60]
+    if k == "keypress":
+        return "keypress %s" % "+".join(action["keys"])
+    return k
+
+
+def _as_payment(action):
+    """A sensitive click is checked as the payment it would trigger: amount and
+    recipient are read from the pixels by the engine, never from the action."""
+    return action if action.get("kind") == "pay" else dict(action, kind="pay")
 
 
 def build_receipt(policy, approval_event, executed_capture, verify_result, flagged):

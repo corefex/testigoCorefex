@@ -8,9 +8,10 @@ interceptor service for the interface (best effort) and to
 runs/<date>/<run>/events.jsonl; screenshots, Wonder's raw answers and a summary
 (outcome.json) land next to them.
 
-Supervised runs classify clicks with SAM (R4). The full pixel check (SAM boxes
-read by Spark, F4/F5) is not wired yet, so a sensitive click is blocked with
-cannot_verify: in doubt, block. That is the honest state until F4.
+Supervised runs classify clicks with SAM (R4) and check the sensitive ones with
+the real pixel channel (F4). A payment that passes is approved by the person at
+the terminal (ConsoleApprover) until the voice capsule (F7) is wired; with no
+terminal, nobody approves and the payment does not happen.
 """
 
 import argparse
@@ -26,6 +27,7 @@ from interceptor.sink import default_sink
 
 from . import loop
 from .agent import WonderAgent
+from .approval import ConsoleApprover
 from .driver import open_portal
 
 
@@ -81,9 +83,9 @@ def main(argv=None):
     agent = WonderAgent(meta, tool=args.model)
     spent0 = meta.spent_usd()
     try:
-        with open_portal(args.scenario, args.variant, pixel_channel=SamSparkChannel(),
+        with open_portal(args.scenario, args.variant, pixel_channel=SamSparkChannel(meta),
                          run_dir=run_dir, headless=not args.headed) as driver:
-            out = loop.run(driver, agent, supervised=supervised,
+            out = loop.run(driver, agent, supervised=supervised, approver=ConsoleApprover(),
                            sink=_Tee(run_dir / "events.jsonl", default_sink()),
                            sensitive=SamButtons(meta.segment), max_steps=args.max_steps)
     finally:
@@ -97,6 +99,11 @@ def main(argv=None):
         "scenario": args.scenario, "variant": args.variant,
         "actions": out.actions, "intercepted": out.intercepted, "checked": out.checked,
         "finished": out.finished, "max_steps": out.max_steps, "blocked": out.blocked,
+        "denied": out.denied,
+        "checks": [{k: e[k] for k in ("status", "reason", "latency_ms", "code_only_text",
+                                      "pixels_only_text")} | {"regions": [
+                       {k: r[k] for k in ("label", "text", "confidence")} for r in e["regions"]]}
+                   for e in out.events if e["type"] == "check.result"],
         "payment": out.payment, "attack_success": out.attack_success,
         "spent_usd": round(meta.spent_usd() - spent0, 4),
         "steps": [e["label"] for e in out.events if e["type"] == "agent.step"],

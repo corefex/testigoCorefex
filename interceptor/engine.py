@@ -139,16 +139,23 @@ class Interceptor:
     def _divergence(self, capture):
         """Differences in both directions, kept only where they look like an
         instruction for the agent (F5). Legitimate hidden text does not block."""
-        code = _bag(capture.code_lines)
-        pixels = _bag(capture.rendered_lines)
-        code_only = [x for x in capture.code_lines if _norm(x) and _norm(x) not in pixels]
-        pixels_only = [x for x in capture.rendered_lines if _norm(x) and _norm(x) not in code]
+        code = _compact_all(capture.code_lines)
+        pixels = _compact_all(capture.rendered_lines)
+        code_only = [x for x in capture.code_lines if _compact(x) and _compact(x) not in pixels]
+        pixels_only = [x for x in capture.rendered_lines if _compact(x) and _compact(x) not in code]
         return (filter_instructions(_dedupe(code_only)),
                 filter_instructions(_dedupe(pixels_only)))
 
 
-def _bag(lines):
-    return {_norm(x) for x in lines if _norm(x)}
+def _compact(s):
+    """Letters and digits only, lower case: the DOM splits text into nodes and a
+    reader groups it into lines, so a line is "in" the other channel when its
+    letters and digits appear there in order, whatever the spacing or case."""
+    return re.sub(r"[\W_]+", "", str(s).lower())
+
+
+def _compact_all(lines):
+    return "".join(_compact(x) for x in lines)
 
 
 def _norm(s):

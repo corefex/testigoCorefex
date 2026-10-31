@@ -7,8 +7,9 @@ least --min-actions actions were proposed, and counts how many passed through
 the loop's hook before reaching Playwright. Passes when the two counts are
 equal and reach the minimum (10 of 10).
 
-Until F4 wires the full pixel check, a click on the pay button is blocked with
-cannot_verify, so each run usually contributes one action. Wonder's raw answers
+g2 only counts the hook, so it runs without the pixel models (no spend on
+them): a click on the pay button is blocked with cannot_verify, and each run
+usually contributes one action. Wonder's raw answers
 and each run's outcome go to runs/gate/<date>/g2/.
 """
 

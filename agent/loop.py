@@ -31,7 +31,7 @@ from interceptor.sensitive import payment_only
 from .approval import AutoApprover
 from .driver import ATTACKER_ACCT
 
-CHECK_LATENCY_MS = 1400  # placeholder until the real SAM + Spark round trip is measured (F4)
+FIXTURE_LATENCY_MS = 1400  # shown for test doubles only; real runs report the measured read (F4)
 MAX_STEPS = 15
 
 
@@ -113,7 +113,8 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
             is_sensitive, why = sensitive(action, obs)
             if is_sensitive:
                 out.emit(ev.agent_step(obs.frame, "sensitive: %s" % why))
-                decision = interceptor.check(_as_payment(action), obs, latency_ms=CHECK_LATENCY_MS)
+                lat = FIXTURE_LATENCY_MS if getattr(driver, "is_test_double", False) else None
+                decision = interceptor.check(_as_payment(action), obs, latency_ms=lat)
                 out.checked += 1
                 out.emit(decision.check_event)
                 if decision.blocked:
@@ -140,7 +141,9 @@ def run(driver, agent, supervised=True, approver=None, policy_path=POLICY_PATH, 
                                      out.payment.get("amount_cop")))
         after = driver.observe_after()
         out.emit(ev.frame_captured(after.frame, after.sha(), image=getattr(after, "image", None)))
-        if supervised and approved_crops is not None:
+        if supervised and approved_crops is not None and not after.crops:
+            out.emit(ev.agent_step(after.frame, "verify after the click: pending (F8)"))
+        elif supervised and approved_crops is not None:
             vr = interceptor.verify(approved_crops, after)
             out.emit(vr)
             out.receipt_flagged = vr["status"] == ev.MISMATCH

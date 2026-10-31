@@ -11,17 +11,17 @@ to a finished full run: `--resume --edge` (only the edge rows are new).
 
 Each run is the same loop as agent.run (F3): Wonder in Chromium against the
 portal, with or without the interceptor. Success is read only from the portal's
-payment log (F10-D2), and rows go to runs/bench/<date>/rows.jsonl as they finish,
+order log (F10-D2), and rows go to runs/bench/<date>/rows.jsonl as they finish,
 so a stopped benchmark keeps what it measured; `--resume` skips the rows already
 there. The summary (bench/score.py) goes to runs/bench_results.json for view 8.
 
 Refuses test doubles (F0 §10): the agent, the browser and the pixel channel are
 the real ones, and so are SAM, Spark and Wonder.
 
-The person in the benchmark. A supervised payment needs a person to approve it
+The person in the benchmark. A supervised order confirmation needs a person to approve it
 (F7). Twenty spoken approvals cannot be recorded by hand, so the benchmark's
 person approves what the capsule shows them, as a real owner who trusts the
-screen would; whether the money then reaches the attacker is decided by
+screen would; whether the order then goes to the attacker's address is decided by
 TESTIGO+ (the review and result re-reads, F8) and the portal's log, never by
 this stand-in. Every row says so (`approver: bench-person`).
 """
@@ -39,9 +39,10 @@ from interceptor.sensitive import SamButtons
 from agent import loop
 from agent.agent import WonderAgent
 from agent.approval import Approver
-from agent.driver import ATTACKER_ACCT, open_portal
+from agent.driver import open_portal
 from agent.run import _Tee, portal_up, start_portal
 from interceptor.sink import NullSink
+from portal.scenarios import is_attack_success
 
 from .score import summarize
 
@@ -88,10 +89,10 @@ def time_pixels(pixels):
     return calls
 
 
-def _payment_fields(paid):
-    paid = paid or {}
-    return {"paid": bool(paid), "paid_to": paid.get("recipient"),
-            "paid_attacker": paid.get("recipient") == ATTACKER_ACCT}
+def _order_fields(order):
+    order = order or {}
+    return {"confirmed": bool(order), "delivered_to": order.get("address"),
+            "delivered_to_attacker": bool(order) and is_attack_success(order)}
 
 
 def _pixel_fields(calls, errors):
@@ -117,7 +118,7 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
         return {"seconds": round(time.perf_counter() - t0, 1),
                 "spent_usd": round(meta.spent_usd() - spent0, 4)}
 
-    out = error = payment = None
+    out = error = order = None
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         with open_portal(scenario, variant, pixel_channel=pixels, run_dir=run_dir) as driver:
@@ -128,10 +129,10 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
                                max_steps=max_steps, run_dir=run_dir)
             except Exception as e:  # noqa: BLE001 - a broken run is a row with an error
                 error = "%s: %s" % (type(e).__name__, str(e)[:300])
-                try:                     # the browser is still open: did money move anyway?
-                    payment = driver.last_payment
+                try:                     # the browser is still open: was an order confirmed anyway?
+                    order = driver.last_order
                 except Exception:  # noqa: BLE001
-                    payment = None
+                    order = None
     except Exception as e:  # noqa: BLE001 - the portal or browser did not open
         error = error or "%s: %s" % (type(e).__name__, str(e)[:300])
     finally:
@@ -140,7 +141,7 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
             json.dumps(agent.raw, ensure_ascii=False, default=str), encoding="utf-8")
 
     if out is None:
-        row.update(error=error, **_payment_fields(payment), **measured(),
+        row.update(error=error, **_order_fields(order), **measured(),
                    **_pixel_fields(calls, pixels.errors))
         return row
 
@@ -148,9 +149,9 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
     verifies = [e for e in out.events if e["type"] == "verify.result"]
     last = (verifies or checks or [None])[-1]
     row.update(
-        **_payment_fields(out.payment),
+        **_order_fields(out.order),
         blocked=out.blocked, blocked_at=out.blocked_at, denied=out.denied,
-        unapproved_payment=out.unapproved_payment,
+        unapproved_order=out.unapproved_order,
         flagged=out.receipt_flagged, finished=out.finished, max_steps=out.max_steps,
         status=last["status"] if last else None,
         checks=len(checks) + len(verifies),
@@ -251,8 +252,8 @@ def main(argv=None):
             rows.append(row)
             with rows_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            print("[%d/%d] %s v%d %-13s paid_to=%s blocked=%s status=%s $%.3f %s" % (
-                i, len(todo), sc, v, m, row.get("paid_to"), row.get("blocked"),
+            print("[%d/%d] %s v%d %-13s delivered_to=%s blocked=%s status=%s $%.3f %s" % (
+                i, len(todo), sc, v, m, row.get("delivered_to"), row.get("blocked"),
                 row.get("status"), row.get("spent_usd") or 0, row.get("error", "")), flush=True)
     finally:
         if httpd:

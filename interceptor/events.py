@@ -9,21 +9,21 @@ Event types:
   agent.step          the agent proposed or completed a step
   frame.captured      a screenshot was taken
   check.result        the pre-action verdict (ok|divergence|policy_violation|cannot_verify)
-  approval.requested  a payment that passed checks now needs the person
+  approval.requested  an order confirmation that passed checks now needs the person
   approval.granted    the person approved (voice + passkey)
   verify.result       the after-the-click comparison (match|mismatch)
   receipt.signed      the signed receipt was written
-  payment.executed    what the portal recorded as paid (both modes; view 3)
+  order.confirmed     what the portal recorded as confirmed (both modes; view 3)
 
 Optional fields added by F11 (absent until the producer has them):
   frame.captured.image        screenshot path, relative to runs/
-  approval.requested.images   {"amount": path, "recipient": path} crop PNGs
+  approval.requested.images   {"amount": path, "address": path} crop PNGs
   verify.result.images        {"approved": {...}, "executed": {...}} crop PNGs
   receipt.signed.path         receipt.json path, relative to runs/
 
 check.result.status is one of: ok, divergence, policy_violation, cannot_verify.
-When status is ok and the action is a payment, the engine follows it with an
-approval.requested; a non-payment ok action is simply allowed.
+When status is ok and the action confirms the order, the engine follows it with
+an approval.requested; any other ok action is simply allowed.
 """
 
 import time
@@ -42,7 +42,7 @@ MISMATCH = "mismatch"
 TYPES = frozenset({
     "run.started", "agent.step", "frame.captured", "check.result",
     "approval.requested", "approval.granted", "verify.result",
-    "receipt.signed", "payment.executed",
+    "receipt.signed", "order.confirmed",
 })
 
 
@@ -83,13 +83,13 @@ def check_result(frame, status, regions, code_only_text, pixels_only_text,
     }
 
 
-def approval_requested(frame, amount_cop, recipient_text,
-                       crop_amount_sha, crop_recipient_sha, images=None, ts=None):
+def approval_requested(frame, amount_cop, address_text,
+                       crop_amount_sha, crop_address_sha, images=None, ts=None):
     e = {
         "type": "approval.requested", "frame": frame, "ts": _ts(ts),
         "amount_cop": amount_cop,
-        "recipient": recipient_text,
-        "crops": {"amount": crop_amount_sha, "recipient": crop_recipient_sha},
+        "address": address_text,
+        "crops": {"amount": crop_amount_sha, "address": crop_address_sha},
     }
     if images:
         e["images"] = images
@@ -116,8 +116,8 @@ def verify_result(frame, status, approved, executed, images=None, ts=None,
     e = {
         "type": "verify.result", "frame": frame, "ts": _ts(ts),
         "status": status,
-        "approved": approved,   # {"amount": sha, "recipient": sha}
-        "executed": executed,   # {"amount": sha, "recipient": sha}
+        "approved": approved,   # {"amount": sha, "address": sha}
+        "executed": executed,   # {"amount": sha, "address": sha}
     }
     if images:
         e["images"] = images
@@ -136,11 +136,12 @@ def receipt_signed(receipt_id, signature, path=None, ts=None):
     return e
 
 
-def payment_executed(frame, recipient_acct, amount_cop, ts=None):
-    """What the portal recorded as paid. Emitted in both modes, so view 3 can
-    show the payment that went through without a supervisor."""
-    return {"type": "payment.executed", "frame": frame, "ts": _ts(ts),
-            "recipient": recipient_acct, "amount_cop": amount_cop}
+def order_confirmed(frame, address_text, amount_cop, ts=None):
+    """The order the portal recorded as confirmed, and where it is delivered.
+    Emitted in both modes, so view 3 can show the order that went through
+    without a supervisor."""
+    return {"type": "order.confirmed", "frame": frame, "ts": _ts(ts),
+            "address": address_text, "amount_cop": amount_cop}
 
 
 def region(label, box, text, confidence):

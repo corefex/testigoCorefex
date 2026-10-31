@@ -7,8 +7,8 @@ the key in .secrets/.
 
 A bundle is a folder:
   receipt.json
-  approved_amount.png    approved_recipient.png
-  executed_amount.png    executed_recipient.png
+  approved_amount.png    approved_address.png
+  executed_amount.png    executed_address.png
 
 The crop files hold the exact bytes the interceptor hashed, so `testigo verify`
 recomputes the same sha256. (Here the crops are placeholder bytes; in the live
@@ -27,7 +27,7 @@ from receipts import keys
 from receipts.receipt import build as build_receipt, dumps
 from tests.fixtures import captures as fx
 
-CROP_NAMES = ("amount", "recipient")
+CROP_NAMES = ("amount", "address")
 
 
 def _crops_from(capture):
@@ -38,7 +38,7 @@ def build_bundle(scenario, out_dir, seed=None, policy_path=POLICY_PATH, key_path
     """Run the supervised check/verify for `scenario` and write a signed bundle.
 
     Works for clean (match) and a3 (mismatch). Scenarios blocked before the
-    click (a1/a2/blurred) produce no receipt — there was no approved payment.
+    click (a1/a2/blurred) produce no receipt — there was no approved order.
     """
     policy = load_policy(policy_path)
     if seed is None:
@@ -46,9 +46,9 @@ def build_bundle(scenario, out_dir, seed=None, policy_path=POLICY_PATH, key_path
 
     pre = {"clean": fx.capture_clean, "a3": fx.capture_a3_before}[scenario]()
     itc = Interceptor(policy, fx.channel_for(scenario))
-    decision = itc.check({"kind": "pay"}, pre, latency_ms=1400)
+    decision = itc.check({"kind": "confirm"}, pre, latency_ms=1400)
     if decision.blocked or not decision.needs_approval:
-        raise ValueError("scenario %r produced no approved payment" % scenario)
+        raise ValueError("scenario %r produced no approved order" % scenario)
 
     after = fx.capture_a3_after() if scenario == "a3" else fx.capture_clean(frame=164)
     approved_crops = _crops_from(pre)
@@ -56,14 +56,14 @@ def build_bundle(scenario, out_dir, seed=None, policy_path=POLICY_PATH, key_path
 
     receipt = build_receipt(
         policy,
-        action_text="pay %s COP -> %s" % (
-            decision.approval_event["amount_cop"], decision.approval_event["recipient"]),
+        action_text="confirm order %s COP -> deliver to %s" % (
+            decision.approval_event["amount_cop"], decision.approval_event["address"]),
         amount_cop=decision.approval_event["amount_cop"],
-        recipient_text=decision.approval_event["recipient"],
+        address_text=decision.approval_event["address"],
         approved_crops=approved_crops,
         executed_crops=executed_crops,
         approval={"method": "passkey",
-                  "voice_transcript": "ciento veinte mil pesos a Distribuidora X"},
+                  "voice_transcript": "ciento veinte mil pesos, entrega en Tienda Doña Marta"},
         seed=seed,
     )
 

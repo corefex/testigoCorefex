@@ -17,11 +17,36 @@ from tests.fixtures.bundles import build_bundle
 
 from . import keys
 from . import cli
-from .bundle import crops_of, sign_payment, write as write_bundle
+from .bundle import crops_of, sign_order, write as write_bundle
 from .receipt import BLOCKED, build, canonical, compare, norm_read, sha_crop, sign, verify_signature
 from .verify import MalformedReceipt, verify_receipt
 
 POLICY = str(POLICY_PATH)
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+def examples_current():
+    """The published examples/ carry this version's crop names (R2: amount and
+    address). Until they are replaced after a real run they may predate it."""
+    from .receipt import CROP_NAMES
+    return all((EXAMPLES / n / ("approved_%s.png" % c)).is_file()
+               for n in ("clean", "a3") for c in CROP_NAMES)
+
+
+_SYNTHETIC = []
+
+
+def synthetic_examples():
+    """A folder shaped like examples/ (clean/, a3/, pubkey.txt), built from the
+    test fixtures with a throwaway key, for the CLI tests."""
+    if not _SYNTHETIC:
+        root = Path(tempfile.mkdtemp())
+        seed = keys.generate_seed()
+        for scenario in ("clean", "a3"):
+            build_bundle(scenario, str(root / scenario), seed=seed, policy_path=POLICY)
+        (root / "pubkey.txt").write_text(keys.public_from_seed(seed).hex() + "\n")
+        _SYNTHETIC.append(root)
+    return _SYNTHETIC[0]
 
 
 class Ed25519Tests(unittest.TestCase):
@@ -48,10 +73,10 @@ class SignBuildTests(unittest.TestCase):
         cls.seed = keys.generate_seed()
 
     def _receipt(self, executed=None):
-        approved = {"amount": b"A", "recipient": b"R"}
-        executed = executed or {"amount": b"A", "recipient": b"R"}
-        return build(self.policy, "pay 120000 COP -> Distribuidora X",
-                     120000, "Distribuidora X · 310-XXX-4417",
+        approved = {"amount": b"A", "address": b"R"}
+        executed = executed or {"amount": b"A", "address": b"R"}
+        return build(self.policy, "confirm order 120000 COP -> deliver to Tienda Doña Marta",
+                     120000, "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
                      approved, executed,
                      {"method": "passkey", "voice_transcript": "..."}, self.seed)
 
@@ -106,7 +131,7 @@ class VerifyChecksTests(unittest.TestCase):
     def test_tampered_receipt_fails_signature(self):
         path, ev = self._bundle("clean")
         r = json.loads(Path(path).read_text())
-        r["recipient"] = "300-XXX-0000"
+        r["address"] = "Bodega Norte · Carrera 80 # 7-15, Bogotá"
         Path(path).write_text(json.dumps(r))
         res = verify_receipt(path, evidence_dir=ev, policy_path=POLICY)
         self.assertFalse(res.ok)
@@ -115,7 +140,7 @@ class VerifyChecksTests(unittest.TestCase):
     def test_swapped_evidence_file_fails_step_three(self):
         path, ev = self._bundle("clean")
         # overwrite an approved crop file with different bytes
-        Path(ev, "approved_recipient.png").write_bytes(b"tampered")
+        Path(ev, "approved_address.png").write_bytes(b"tampered")
         res = verify_receipt(path, evidence_dir=ev, policy_path=POLICY)
         self.assertFalse(res.ok)
         self.assertEqual(res.first_failure.n, 3)
@@ -138,11 +163,11 @@ class ReadValueTests(unittest.TestCase):
         cls.seed = keys.generate_seed()
 
     def _write(self, **kw):
-        approved = {"amount": b"A1", "recipient": b"R1"}
-        executed = kw.pop("executed", {"amount": b"A2", "recipient": b"R2"})   # moved boxes
-        r = build(self.policy, "pay", 120000, "Distribuidora X · 310-XXX-4417",
+        approved = {"amount": b"A1", "address": b"R1"}
+        executed = kw.pop("executed", {"amount": b"A2", "address": b"R2"})   # moved boxes
+        r = build(self.policy, "confirm order", 120000, "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
                   approved, executed, {"method": "console", "voice_transcript": ""}, self.seed,
-                  approved_read={"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
+                  approved_read={"amount": "120000", "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"},
                   **kw)
         d = Path(tempfile.mkdtemp())
         write_bundle(r, approved, executed, d)
@@ -150,13 +175,14 @@ class ReadValueTests(unittest.TestCase):
 
     def test_same_read_values_pass_though_hashes_differ(self):
         r, d = self._write(executed_read={"amount": "COP 120,000",
-                                          "recipient": "distribuidora x 310-XXX-4417"})
+                                          "address": "tienda doña marta cl 45 no 12-30"})
         self.assertEqual(r["comparison"], {"status": "match", "by": "read"})
         res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
         self.assertTrue(res.ok, res.summary())
 
-    def test_changed_recipient_read_fails_step_four(self):
-        r, d = self._write(executed_read={"amount": "COP 120,000", "recipient": "300-XXX-0000"})
+    def test_changed_address_read_fails_step_four(self):
+        r, d = self._write(executed_read={"amount": "COP 120,000",
+                                          "address": "Bodega Norte · Carrera 80 # 7-15"})
         self.assertEqual(r["comparison"]["status"], "mismatch")
         res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 4)
@@ -165,7 +191,7 @@ class ReadValueTests(unittest.TestCase):
 
     def test_swapped_executed_file_fails_step_four(self):
         _, d = self._write(executed_read={"amount": "120000",
-                                          "recipient": "Distribuidora X · 310-XXX-4417"})
+                                          "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"})
         Path(d, "executed_amount.png").write_bytes(b"tampered")
         res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 4)
@@ -197,8 +223,15 @@ class ReadValueTests(unittest.TestCase):
 class ExamplesTests(unittest.TestCase):
     """The published examples keep verifying with the old (hash-only) format."""
 
+    @unittest.skipUnless(examples_current(), "examples/ predates R2 (delivery address); "
+                                             "it is replaced after a real run")
     def test_examples(self):
-        root = Path(__file__).resolve().parent.parent / "examples"
+        self._check(EXAMPLES)
+
+    def test_synthetic_examples_like_the_published_ones(self):
+        self._check(synthetic_examples())
+
+    def _check(self, root):
         pub = bytes.fromhex((root / "pubkey.txt").read_text().strip())
         clean = verify_receipt(str(root / "clean/receipt.json"), evidence_dir=str(root / "clean"),
                                policy_path=POLICY, pinned_pubkey=pub)
@@ -252,31 +285,31 @@ class HardeningTests(unittest.TestCase):
 
     def test_non_hex_hash_fails(self):
         h = sha_crop(b"A")
-        d = self._signed({"approved": {"amount": h, "recipient": "XYZ"},
-                          "executed": {"amount": h, "recipient": "XYZ"}})
+        d = self._signed({"approved": {"amount": h, "address": "XYZ"},
+                          "executed": {"amount": h, "address": "XYZ"}})
         res = verify_receipt(str(d / "receipt.json"), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 3)
         self.assertIn("sha256", res.checks[2].detail)
 
     def test_missing_evidence_files_fail(self):
         ha, hr = sha_crop(b"A"), sha_crop(b"R")
-        body = {"approved": {"amount": ha, "recipient": hr},
-                "executed": {"amount": ha, "recipient": hr}}
-        d = self._signed(body, {"approved_amount.png": b"A", "approved_recipient.png": b"R",
+        body = {"approved": {"amount": ha, "address": hr},
+                "executed": {"amount": ha, "address": hr}}
+        d = self._signed(body, {"approved_amount.png": b"A", "approved_address.png": b"R",
                                 "executed_amount.png": b"A"})
         res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
         self.assertTrue(res.checks[2].ok)
         self.assertEqual(res.first_failure.n, 4)
-        self.assertIn("executed recipient file missing", res.checks[3].detail)
-        (d / "approved_recipient.png").unlink()
+        self.assertIn("executed address file missing", res.checks[3].detail)
+        (d / "approved_address.png").unlink()
         res = verify_receipt(str(d / "receipt.json"), evidence_dir=str(d), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 3)
         self.assertIn("missing", res.checks[2].detail)
 
     def test_extra_executed_crop_name_fails(self):
         ha, hr = sha_crop(b"A"), sha_crop(b"R")
-        d = self._signed({"approved": {"amount": ha, "recipient": hr},
-                          "executed": {"amount": ha, "recipient": hr, "memo": ha}})
+        d = self._signed({"approved": {"amount": ha, "address": hr},
+                          "executed": {"amount": ha, "address": hr, "memo": ha}})
         res = verify_receipt(str(d / "receipt.json"), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 4)
         self.assertIn("memo", res.checks[3].detail)
@@ -284,7 +317,7 @@ class HardeningTests(unittest.TestCase):
     # 2. malformed receipts: a clear message, exit 1, no traceback
     def test_malformed_receipts_exit_1(self):
         h = sha_crop(b"A")
-        good = {"approved": {"amount": h, "recipient": h}, "executed": None}
+        good = {"approved": {"amount": h, "address": h}, "executed": None}
         cases = [
             [1, 2, 3],
             dict(good, read={"approved": "120000", "executed": None}),
@@ -309,7 +342,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("Malformed receipt: not valid JSON", out)
 
     def test_bad_pubkey_is_usage_error(self):
-        clean = str(Path(__file__).resolve().parent.parent / "examples/clean/receipt.json")
+        clean = str(synthetic_examples() / "clean/receipt.json")
         for bad in ("zz", "abcd"):
             code, out, err = _run_cli("verify", clean, "--pubkey", bad)
             self.assertEqual(code, 2)
@@ -317,7 +350,7 @@ class HardeningTests(unittest.TestCase):
 
     # 3. a partial executed capture records only what was written
     def _event(self):
-        return {"amount_cop": 120000, "recipient": "Distribuidora X · 310-XXX-4417"}
+        return {"amount_cop": 120000, "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"}
 
     def test_crops_of_returns_partial_or_none(self):
         self.assertEqual(crops_of(SimpleNamespace(crops={"amount": b"A"})), {"amount": b"A"})
@@ -326,22 +359,22 @@ class HardeningTests(unittest.TestCase):
 
     def test_partial_executed_capture_recorded_honestly(self):
         d = Path(tempfile.mkdtemp())
-        vr = {"executed": {"amount": "f" * 64, "recipient": "e" * 64}}
-        r, path = sign_payment(self.policy, self._event(), {"method": "console"},
-                               {"amount": b"A", "recipient": b"R"}, self.seed,
+        vr = {"executed": {"amount": "f" * 64, "address": "e" * 64}}
+        r, path = sign_order(self.policy, self._event(), {"method": "console"},
+                               {"amount": b"A", "address": b"R"}, self.seed,
                                executed_crops={"amount": b"A2"}, verify_result=vr, run_dir=d)
         self.assertEqual(r["executed"], {"amount": sha_crop(b"A2")})
         self.assertTrue((d / "executed_amount.png").is_file())
-        self.assertFalse((d / "executed_recipient.png").exists())
+        self.assertFalse((d / "executed_address.png").exists())
         res = verify_receipt(str(path), evidence_dir=str(d), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 4)
-        self.assertIn("recipient hash not recorded", res.checks[3].detail)
+        self.assertIn("address hash not recorded", res.checks[3].detail)
 
     def test_no_executed_crops_means_not_captured(self):
         d = Path(tempfile.mkdtemp())
-        vr = {"executed": {"amount": "f" * 64, "recipient": "e" * 64}}
-        r, path = sign_payment(self.policy, self._event(), {"method": "console"},
-                               {"amount": b"A", "recipient": b"R"}, self.seed,
+        vr = {"executed": {"amount": "f" * 64, "address": "e" * 64}}
+        r, path = sign_order(self.policy, self._event(), {"method": "console"},
+                               {"amount": b"A", "address": b"R"}, self.seed,
                                executed_crops=None, verify_result=vr, run_dir=d)
         self.assertIsNone(r["executed"])
         res = verify_receipt(str(path), evidence_dir=str(d), policy_path=POLICY)
@@ -349,11 +382,11 @@ class HardeningTests(unittest.TestCase):
 
     def test_full_executed_capture_with_reads_passes(self):
         d = Path(tempfile.mkdtemp())
-        r, path = sign_payment(self.policy, self._event(), {"method": "console"},
-                               {"amount": b"A", "recipient": b"R"}, self.seed,
-                               executed_crops={"amount": b"A2", "recipient": b"R2"},
+        r, path = sign_order(self.policy, self._event(), {"method": "console"},
+                               {"amount": b"A", "address": b"R"}, self.seed,
+                               executed_crops={"amount": b"A2", "address": b"R2"},
                                executed_read={"amount": "COP 120.000",
-                                              "recipient": "To 310-xxx-4417"},
+                                              "address": "Deliver to Calle 45 # 12-30"},
                                run_dir=d)
         self.assertEqual(r["comparison"], {"status": "match", "by": "read"})
         res = verify_receipt(str(path), evidence_dir=str(d), policy_path=POLICY)
@@ -361,7 +394,7 @@ class HardeningTests(unittest.TestCase):
 
     # 4. approved read without executed read is pending, not by hash
     def test_compare_pending_when_executed_read_missing(self):
-        h = {"amount": "a" * 64, "recipient": "b" * 64}
+        h = {"amount": "a" * 64, "address": "b" * 64}
         self.assertEqual(compare({"amount": "1"}, None, h, dict(h)),
                          {"status": "pending", "by": None})
         self.assertEqual(compare(None, {"amount": "1"}, h, dict(h)),
@@ -370,8 +403,8 @@ class HardeningTests(unittest.TestCase):
 
     def test_receipt_without_executed_read_is_pending_at_step_4(self):
         d = Path(tempfile.mkdtemp())
-        same = {"amount": b"A", "recipient": b"R"}
-        r, path = sign_payment(self.policy, self._event(), {"method": "console"},
+        same = {"amount": b"A", "address": b"R"}
+        r, path = sign_order(self.policy, self._event(), {"method": "console"},
                                same, self.seed, executed_crops=dict(same), run_dir=d)
         self.assertEqual(r["comparison"]["status"], "pending")
         res = verify_receipt(str(path), evidence_dir=str(d), policy_path=POLICY)
@@ -380,7 +413,7 @@ class HardeningTests(unittest.TestCase):
 
     # 5. say whether the key was pinned
     def test_key_note_unpinned_and_pinned(self):
-        root = Path(__file__).resolve().parent.parent / "examples"
+        root = synthetic_examples()
         code, out, _ = _run_cli("verify", str(root / "clean/receipt.json"))
         self.assertEqual(code, 0)
         self.assertIn("Key: embedded in the receipt (not pinned; pass --pubkey to pin it)", out)
@@ -395,38 +428,97 @@ class HardeningTests(unittest.TestCase):
 
 
 class NormReadTests(unittest.TestCase):
-    """The recipient compares by account number: labels differ per screen."""
+    """The address compares by its canonical street address: labels, names and
+    the city differ per screen and do not count."""
 
-    def test_labels_do_not_count(self):
-        a = norm_read("recipient", "PAY TO (NEQUI ACCOUNT) 310-XXX-4417 Distribuidora X")
-        b = norm_read("recipient", "To 310-xxx-4417")
-        self.assertEqual(a, "310-xxx-4417")
+    SHOP = "calle 45 # 12-30"
+
+    def test_labels_names_and_city_do_not_count(self):
+        a = norm_read("address", "DELIVER TO Tienda Doña Marta · Calle 45 # 12-30, Bogotá")
+        b = norm_read("address", "To: Calle 45 # 12-30")
+        self.assertEqual(a, self.SHOP)
         self.assertEqual(a, b)
 
-    def test_other_account_differs(self):
-        self.assertNotEqual(norm_read("recipient", "To 310-xxx-4417"),
-                            norm_read("recipient", "300-XXX-0000"))
+    def test_other_address_differs(self):
+        self.assertNotEqual(norm_read("address", "Calle 45 # 12-30"),
+                            norm_read("address", "Carrera 80 # 7-15"))
+        # same numbers on another street type are another address
+        self.assertNotEqual(norm_read("address", "Calle 45 # 12-30"),
+                            norm_read("address", "Carrera 45 # 12-30"))
+        self.assertNotEqual(norm_read("address", "Calle 45 # 12-30"),
+                            norm_read("address", "Calle 45 # 12-31"))
 
-    def test_accounts_sorted_and_deduplicated(self):
-        self.assertEqual(norm_read("recipient", "300-XXX-0000 / 310-xxx-4417 310-XXX-4417"),
-                         "300-xxx-0000,310-xxx-4417")
+    def test_addresses_sorted_and_deduplicated(self):
+        self.assertEqual(
+            norm_read("address", "Kr 80 # 7-15 / Calle 45 # 12-30 Cl. 45 No. 12-30"),
+            "calle 45 # 12-30,carrera 80 # 7-15")
 
-    def test_without_account_letters_and_digits(self):
-        self.assertEqual(norm_read("recipient", "Distribuidora X!"), "distribuidorax")
+    def test_without_address_letters_and_digits(self):
+        self.assertEqual(norm_read("address", "Tienda Doña Marta!"), "tiendadoñamarta")
+        self.assertEqual(norm_read("address", "carrera ochenta número siete quince"),
+                         "carreraochentanúmerosietequince")
         self.assertEqual(norm_read("amount", "COP 120,000"), "120000")
-        self.assertIsNone(norm_read("recipient", None))
+        self.assertIsNone(norm_read("address", None))
 
 
 class ReadNormalizationTests(unittest.TestCase):
     """Review of F8: what a reader may return for the same value compares equal."""
 
-    def test_accounts(self):
-        from receipts.receipt import norm_read
-        same = ["310-XXX-4417", "310 XXX 4417", "310\u2013XXX\u20134417", "310-***-4417",
-                "310-XXX-44I7", "PAY TO (NEQUI ACCOUNT) 310-xxx-4417 Distribuidora X"]
+    def test_street_types_and_abbreviations(self):
+        cases = {
+            "calle 45 # 12-30": ("Calle 45 # 12-30", "CALLE 45 # 12-30", "Cl 45 # 12-30",
+                                 "Cl. 45 # 12-30", "Cll 45 # 12-30", "cll. 45 #12-30"),
+            "carrera 80 # 7-15": ("Carrera 80 # 7-15", "Cra 80 # 7-15", "Cra. 80 # 7-15",
+                                  "Kr 80 # 7-15", "Kra 80 # 7-15", "Cr 80 # 7-15"),
+            "avenida 68 # 24-10": ("Avenida 68 # 24-10", "Av 68 # 24-10", "Av. 68 # 24-10",
+                                   "Avda 68 # 24-10"),
+            "diagonal 5 # 6-7": ("Diagonal 5 # 6-7", "Dg 5 # 6-7", "Diag. 5 # 6-7"),
+            "transversal 3 # 4-5": ("Transversal 3 # 4-5", "Tv 3 # 4-5", "Tr. 3 # 4-5",
+                                    "Transv 3 # 4-5"),
+        }
+        for want, forms in cases.items():
+            for f in forms:
+                self.assertEqual(norm_read("address", f), want, f)
+
+    def test_number_separators(self):
+        for s in ("Calle 45 # 12-30", "Calle 45 #12-30", "Calle 45#12-30", "Calle 45 No. 12-30",
+                  "Calle 45 No 12-30", "Calle 45 no. 12-30", "Calle 45 N° 12-30",
+                  "Calle 45 Nº 12-30", "Calle 45 N.° 12-30", "Calle 45 Nro. 12-30",
+                  "Calle 45 número 12-30", "Calle 45 numero 12-30", "Calle 45 12-30"):
+            self.assertEqual(norm_read("address", s), "calle 45 # 12-30", s)
+
+    def test_dashes_and_spacing(self):
+        for s in ("Calle 45 # 12-30", "Calle 45 # 12 - 30", "Calle 45 # 12\u201330",
+                  "Calle 45 # 12\u201430", "Calle 45 # 12 \u2013 30", "Calle  45  #  12-30"):
+            self.assertEqual(norm_read("address", s), "calle 45 # 12-30", s)
+
+    def test_ocr_digit_slips(self):
+        # I, l and O misread for 1, 1 and 0 in digit places
+        for s in ("Calle 45 # I2-30", "Calle 45 # l2-30", "Calle 45 # 12-3O",
+                  "Calle 45 # I2-3O", "Carrera 8O # 7-l5"):
+            self.assertIn(norm_read("address", s), ("calle 45 # 12-30", "carrera 80 # 7-15"), s)
+        self.assertEqual(norm_read("address", "Carrera 8O # 7-l5"), "carrera 80 # 7-15")
+        # a group with no real digit is not a number
+        self.assertEqual(norm_read("address", "Calle IO # lO-OO"), "calleiolooo")
+
+    def test_leading_zeros_do_not_count(self):
+        self.assertEqual(norm_read("address", "Calle 045 # 012-030"), "calle 45 # 12-30")
+
+    def test_same_value_from_each_screen(self):
+        same = ["Calle 45 # 12-30", "Deliver to: Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
+                "Calle 45 # 12-30, Bogotá Tienda Doña Marta", "DELIVERED TO Cl 45 No. 12–30",
+                "Entrega en: CLL 45 N° I2-3O (simulado)"]
         for s in same:
-            self.assertEqual(norm_read("recipient", s), "310-xxx-4417", s)
-        self.assertNotEqual(norm_read("recipient", "300-XXX-0000"), "310-xxx-4417")
+            self.assertEqual(norm_read("address", s), "calle 45 # 12-30", s)
+        self.assertNotEqual(norm_read("address", "Bodega Norte · Carrera 80 # 7-15"),
+                            "calle 45 # 12-30")
+
+    def test_not_an_address(self):
+        # an order number, a total or a street word without numbers are not addresses
+        self.assertEqual(norm_read("address", "Order DX-2041"), "orderdx2041")
+        self.assertEqual(norm_read("address", "Calle de la tienda"), "calledelatienda")
+        self.assertEqual(norm_read("address", "Calle 45"), "calle45")
+        self.assertEqual(norm_read("address", "Recalle 45 # 12-30"), "recalle451230")
 
     def test_amounts(self):
         from receipts.receipt import norm_read

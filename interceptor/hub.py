@@ -31,11 +31,11 @@ REQUIRED = {
     "frame.captured": {"sha256": _STR},
     "check.result": {"status": _STR, "regions": _LIST, "code_only_text": _LIST,
                      "pixels_only_text": _LIST, "latency_ms": _NUM},
-    "approval.requested": {"amount_cop": _NUM, "recipient": _STR, "crops": _DICT},
+    "approval.requested": {"amount_cop": _NUM, "address": _STR, "crops": _DICT},
     "approval.granted": {"voice_match": _BOOL},
     "verify.result": {"status": _STR, "approved": _DICT, "executed": _DICT},
     "receipt.signed": {"id": _STR, "signature": _STR},
-    "payment.executed": {"recipient": _STR, "amount_cop": _NUM},
+    "order.confirmed": {"address": _STR, "amount_cop": _NUM},
 }
 
 

@@ -1,20 +1,21 @@
 # TESTIGO+ signed policy — the compiled output of Marta's spoken mandate (F1).
 # The interceptor enforces this; the agent cannot change it. Values are simulated.
-# The recipient is tied by name AND account (F1-D2): the account is not spoken in
-# the demo phrase, so it is taken from the portal catalogue and marked simulated.
+# The delivery destination is tied by name AND address (F1-D2): the address is
+# not spoken in the demo phrase, so it is taken from the shop profile
+# (common/config.py SHOP) and marked simulated.
 version: 1
 owner: marta
 source: voice
-transcript: "Solo puedes pagarle a Distribuidora X, máximo ciento cincuenta mil pesos"
+transcript: "Solo pide con entrega en la tienda, máximo ciento cincuenta mil pesos por pedido"
 rules:
-  - pay_only:
-      - name: "Distribuidora X"
-        account: "310-XXX-4417"
-  - max_per_payment_cop: 150000
-  - ask_before: new_recipient
+  - deliver_only:
+      - name: "Tienda Doña Marta"
+        address: "Calle 45 # 12-30, Bogotá"
+  - max_per_order_cop: 150000
+  - ask_before: new_address
 signed_by: passkey:marta
 # sha256 over the canonical content (everything except sha256 and signature);
 # signature is an Ed25519 signature of the owner's key over the same content.
 # Both are stamped by policy/compile.py; the placeholders below are replaced.
-sha256: "0c46e7272685f8a11c48d3c93e8a1379fc74c3543dfd6107fb825f32fc74f18f"
-signature: "ed25519:9b96834a3add4ca1972c18694db597381b995313b345eab5359f2f69a1420cb2d436abedc7aafec33e731eeca4742e88b45456202fb6481db3235fb128ec930f"
+sha256: "e83de2e784bca58b6c701c977838c38cab1824ff81b3646cea518c962bb3de37"
+signature: "ed25519:ef280ad1ae4cb296242e9e3df170c679be587331163b3ca1ba219a74f034da096c3b94bb7e1f5bf72ef4ddc8f982f6d152776d2c4f082560c39eeb73f5cc4e05"

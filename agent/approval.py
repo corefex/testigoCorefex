@@ -1,12 +1,12 @@
 """Approval: voice confirms the intent; a passkey would prove it is the person.
 
-The loop asks an `Approver` when the interceptor says a payment needs approval.
+The loop asks an `Approver` when the interceptor says an order confirmation needs approval.
 Offline, `AutoApprover` grants (the happy path) and `DenyApprover` refuses.
 
 Real runs use `ServiceApprover` (F7 with R8): the approval opens in the
-interface (view 5), the person reads the amount and recipient aloud, Voice
+interface (view 5), the person reads the total and the destination aloud, Voice
 Transcribe transcribes it, the service compares it with the amount and
-recipient read from the pixels, and only then can the person click Approve.
+address read from the pixels, and only then can the person click Approve.
 Voice decides *what*. The passkey (*who*) is optional under R8 and not used;
 `WebAuthnApprover` stays a stub. `ConsoleApprover` is the terminal fallback.
 """
@@ -28,7 +28,7 @@ class Approver:
 class AutoApprover(Approver):
     """Grants, as if the person read the amount aloud and tapped the passkey."""
 
-    def __init__(self, voice_transcript="ciento veinte mil pesos a Distribuidora X"):
+    def __init__(self, voice_transcript="ciento veinte mil pesos, entrega en Tienda Doña Marta"):
         self.voice_transcript = voice_transcript
 
     def approve(self, approval_event):
@@ -59,7 +59,7 @@ class ConsoleApprover(Approver):
     """A person approves in the terminal, looking at what the pixels read.
 
     The fallback when the interface is not running (or with --approve-in
-    console): it shows the amount and recipient read from the screen and asks
+    console): it shows the amount and address read from the screen and asks
     for "yes". No voice. Without a terminal (gate, benchmark) nobody can
     approve, so it refuses."""
 
@@ -73,9 +73,9 @@ class ConsoleApprover(Approver):
         if not self.interactive:
             return False, dict(info, reason="no person at the terminal to approve")
         print("\nTESTIGO+ asks for approval (read from the pixels):")
-        print("  amount:    COP {:,}".format(approval_event["amount_cop"]))
-        print("  recipient: %s" % approval_event["recipient"])
-        answer = self.ask("Approve this payment? Type yes to approve: ").strip().lower()
+        print("  total:      COP {:,}".format(approval_event["amount_cop"]))
+        print("  deliver to: %s" % approval_event["address"])
+        answer = self.ask("Approve this order? Type yes to approve: ").strip().lower()
         return answer == "yes", info
 
 
@@ -86,10 +86,10 @@ class ServiceApprover(Approver):
     person decides there, or until `timeout_s` (then it denies, and says so
     on the service so the page stops offering the buttons). Any doubt —
     service unreachable, a decision for another event, an approve without a
-    voice that matched — is a denial: nobody approved, the payment does not
-    happen.
+    voice that matched — is a denial: nobody approved, the order is not
+    confirmed.
 
-    `images_for(event)` may return {"amount": path, "recipient": path} (crop
+    `images_for(event)` may return {"amount": path, "address": path} (crop
     PNGs under runs/) so the capsule can show the crops the event names.
     `http(method, path, body) -> (status, json)` is injectable for tests."""
 
@@ -149,7 +149,7 @@ class ServiceApprover(Approver):
                                 % ((rec or {}).get("detail") if isinstance(rec, dict) else status))
         aid = rec["id"]
         print("\nTESTIGO+ asks for approval in the interface (view 5): read the amount "
-              "and recipient aloud, then Approve or Deny. Waiting up to %ds." % self.timeout_s)
+              "and address aloud, then Approve or Deny. Waiting up to %ds." % self.timeout_s)
         deadline = self.monotonic() + self.timeout_s
         while True:
             status, got = self._call("GET", "/api/approval/%s" % aid)
@@ -182,14 +182,14 @@ class ServiceApprover(Approver):
             return self._denied("the decision is for a different approval", voice)
         if (ev.get("crops") != approval_event.get("crops")
                 or ev.get("amount_cop") != approval_event.get("amount_cop")
-                or ev.get("recipient") != approval_event.get("recipient")):
+                or ev.get("address") != approval_event.get("address")):
             return self._denied("the decision is for a different approval", voice)
         if rec.get("decision") != "approve":
             return self._denied(rec.get("reason") or "denied by the person", voice)
         if not voice.get("match"):
             return self._denied("approve without a voice that matched", voice)
         ok, detail = voice_matches(voice.get("transcript", ""), approval_event.get("amount_cop"),
-                                   approval_event.get("recipient"))
+                                   approval_event.get("address"))
         if not ok:
             return self._denied("the voice re-checked by the run does not match (%s)" % detail,
                                 dict(voice, match=False))

@@ -14,6 +14,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 POLICY_PATH = ROOT / "policy" / "marta.policy.yaml"
 
+# The shop's profile (simulated, R2): where Marta's supplier orders are
+# delivered. The mandate names the shop ("la tienda", "Tienda Doña Marta") but
+# never dictates its address; policy.compile binds the name to this address
+# (F1-D2), and the portal starts every order with it.
+SHOP = {
+    "name": "Tienda Doña Marta",
+    "address": "Calle 45 # 12-30, Bogotá",
+    "simulated": True,
+}
+
 # Every variable read from the environment, with its default ("" = no default).
 ENV_VARS = {
     "META_API_BASE_URL": "",

@@ -1,14 +1,14 @@
 """F7: the approval desk inside the interceptor service.
 
-The loop runs in its own process. When a payment needs the person, its
+The loop runs in its own process. When an order confirmation needs the person, its
 `ServiceApprover` opens the approval here and waits; the interface (view 5)
-records the person reading the amount and recipient aloud, the service has it
+records the person reading the total and the destination aloud, the service has it
 transcribed (Voice Transcribe) and compared — with `voice_match` — against the
-amount and recipient **read from the pixels** in the approval.requested event.
+amount and address **read from the pixels** in the approval.requested event.
 Only a voice that matches unlocks "Approve"; "Deny" is always possible. The
 loop then emits approval.granted with method "voice" and the real transcript.
 
-Voice confirms the intent (what is paid and to whom). It does not prove who is
+Voice confirms the intent (how much is ordered and where it is delivered). It does not prove who is
 speaking; a passkey would, and it is optional and not used (R8).
 
 The desk holds one approval at a time, in memory, and decides nothing on its
@@ -22,7 +22,7 @@ from common import clock
 
 from . import voice_match
 
-MAX_VOICE_ATTEMPTS = 5     # each attempt is a paid Voice Transcribe call
+MAX_VOICE_ATTEMPTS = 5     # each attempt is a billed Voice Transcribe call
 DECISIONS = ("approve", "deny")
 
 
@@ -84,7 +84,7 @@ class ApprovalDesk:
             return _copy(self._find(approval_id))
 
     def start_voice(self, approval_id):
-        """Reserve one transcription attempt (before the paid call)."""
+        """Reserve one transcription attempt (before the billed call)."""
         with self._lock:
             rec = self._find(approval_id)
             self._pending(rec)
@@ -100,9 +100,9 @@ class ApprovalDesk:
             rec = self._find(approval_id)
             self._pending(rec)
             e = rec["event"]
-            ok, detail = voice_match.voice_matches(transcript, e["amount_cop"], e["recipient"])
+            ok, detail = voice_match.voice_matches(transcript, e["amount_cop"], e["address"])
             amt_ok, heard, amt_why = voice_match.amount_check(
-                transcript, e["amount_cop"], e["recipient"])
+                transcript, e["amount_cop"], e["address"])
             rec["voice"] = {
                 "transcript": str(transcript or ""),
                 "match": ok,
@@ -110,9 +110,9 @@ class ApprovalDesk:
                 "heard_amount": heard,
                 "amount_match": amt_ok,
                 "amount_reason": amt_why,
-                "recipient_match": voice_match.recipient_matches(transcript, e["recipient"]),
-                "recipient_name": voice_match.name_of(e["recipient"]),
-                "negated": voice_match.negated(transcript, e["recipient"]),
+                "address_match": voice_match.address_matches(transcript, e["address"]),
+                "address_name": voice_match.name_of(e["address"]),
+                "negated": voice_match.negated(transcript, e["address"]),
                 "latency_ms": latency_ms,
                 "at": self._now(),
             }

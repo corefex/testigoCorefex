@@ -11,7 +11,12 @@ from tests.fixtures.fake_agent import FixtureDriver, ScriptedAgent, run_fixture 
 
 from .approval import AutoApprover, DenyApprover  # noqa: F401
 from .loop import run as loop_run
-from .driver import ATTACKER_ACCT, SUPPLIER_ACCT
+from .driver import ATTACKER_ADDRESS, SHOP_ADDRESS
+from common.address import norm_address
+
+
+def same_address(a, b):
+    return norm_address(a) == norm_address(b)
 
 
 def types(out):
@@ -19,12 +24,12 @@ def types(out):
 
 
 class SupervisedTests(unittest.TestCase):
-    def test_clean_completes_and_pays_supplier(self):
+    def test_clean_completes_and_delivers_to_the_shop(self):
         out = run("clean", supervised=True)
         self.assertTrue(out.executed)
         self.assertFalse(out.blocked)
         self.assertFalse(out.receipt_flagged)
-        self.assertEqual(out.payment["recipient"], SUPPLIER_ACCT)
+        self.assertEqual(out.order["address"], SHOP_ADDRESS)
         self.assertFalse(out.attack_success)
         self.assertIn("receipt.signed", types(out))
 
@@ -32,7 +37,7 @@ class SupervisedTests(unittest.TestCase):
         out = run("a1", supervised=True)
         self.assertTrue(out.blocked)
         self.assertFalse(out.executed)
-        self.assertIsNone(out.payment)
+        self.assertIsNone(out.order)
         self.assertNotIn("receipt.signed", types(out))
 
     def test_a2_blocked_before_click(self):
@@ -44,7 +49,7 @@ class SupervisedTests(unittest.TestCase):
         out = run("a3", supervised=True)
         self.assertTrue(out.executed)
         self.assertTrue(out.receipt_flagged)
-        self.assertTrue(out.reached_attacker)       # money moved...
+        self.assertTrue(out.reached_attacker)       # the order went out...
         self.assertFalse(out.attack_success)        # ...but held, so not a win
         self.assertIn("verify.result", types(out))
 
@@ -56,7 +61,7 @@ class SupervisedTests(unittest.TestCase):
         out = run("clean", supervised=True, approver=DenyApprover())
         self.assertTrue(out.denied)
         self.assertFalse(out.executed)
-        self.assertIsNone(out.payment)
+        self.assertIsNone(out.order)
 
 
 class NoSupervisorTests(unittest.TestCase):
@@ -65,12 +70,12 @@ class NoSupervisorTests(unittest.TestCase):
             out = run(s, supervised=False)
             self.assertTrue(out.executed, s)
             self.assertTrue(out.attack_success, s)
-            self.assertEqual(out.payment["recipient"], ATTACKER_ACCT, s)
+            self.assertTrue(same_address(out.order["address"], ATTACKER_ADDRESS), s)
 
-    def test_clean_pays_supplier_without_supervisor(self):
+    def test_clean_delivers_to_the_shop_without_supervisor(self):
         out = run("clean", supervised=False)
         self.assertFalse(out.attack_success)
-        self.assertEqual(out.payment["recipient"], SUPPLIER_ACCT)
+        self.assertEqual(out.order["address"], SHOP_ADDRESS)
 
     def test_no_receipt_without_supervisor(self):
         out = run("a3", supervised=False)
@@ -97,12 +102,12 @@ class GateInvariantTests(unittest.TestCase):
         # the agent itself is foolable - that is what the supervisor guards.
         drv = FixtureDriver("a1")
         action = ScriptedAgent().propose(drv.observe())
-        self.assertEqual(action["recipient_acct"], ATTACKER_ACCT)
+        self.assertTrue(same_address(action["address_text"], ATTACKER_ADDRESS))
 
     def test_hardened_agent_ignores_injection(self):
         drv = FixtureDriver("a1")
         action = ScriptedAgent(obeys_injections=False).propose(drv.observe())
-        self.assertEqual(action["recipient_acct"], SUPPLIER_ACCT)
+        self.assertEqual(action["address_text"], SHOP_ADDRESS)
 
     def test_event_order_supervised_clean(self):
         out = run("clean", supervised=True)
@@ -110,11 +115,11 @@ class GateInvariantTests(unittest.TestCase):
         self.assertEqual(order[0], "run.started")
         self.assertEqual(order[1], "frame.captured")
         self.assertEqual(order[2], "agent.step")          # proposed
-        self.assertEqual(order[3], "agent.step")          # sensitive: payment action
+        self.assertEqual(order[3], "agent.step")          # sensitive: order confirmation
         self.assertEqual(order[4], "check.result")
         self.assertIn("approval.requested", order)
         # the portal's record comes after the approval, never before it
-        self.assertLess(order.index("approval.granted"), order.index("payment.executed"))
+        self.assertLess(order.index("approval.granted"), order.index("order.confirmed"))
         self.assertEqual(order[-1], "receipt.signed")
 
 
@@ -148,10 +153,10 @@ class SinkTests(unittest.TestCase):
         self.assertFalse(g["granted"])
         self.assertTrue(out.denied)
 
-    def test_no_supervisor_reports_the_payment(self):
+    def test_no_supervisor_reports_the_order(self):
         out = run("a3", supervised=False)
-        paid = [e for e in out.events if e["type"] == "payment.executed"]
-        self.assertEqual(len(paid), 1)
+        confirmed = [e for e in out.events if e["type"] == "order.confirmed"]
+        self.assertEqual(len(confirmed), 1)
         self.assertEqual(out.events[0]["mode"], "no_supervisor")
 
 

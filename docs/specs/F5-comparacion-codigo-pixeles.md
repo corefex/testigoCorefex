@@ -4,11 +4,13 @@
 
 Concreta la fila F5 del spec general: lee el texto de toda la captura y encuentra texto del código que no se ve y texto visible que no está en el código, filtrando lo que no parece una instrucción para el agente. Es la mitad de detección del canal independiente. Si algo aquí contradice a `00-spec-general.md` o `01-spec-construccion.md`, mandan esos. Todo es simulación; la lectura es de Spark, la comparación es código.
 
+> **1 nov (R2):** las señales del filtro antes buscaban datos de un pago; ahora buscan direcciones y verbos de entrega (`03-revision-31-oct.md` §10).
+
 ## Decisiones pendientes
 
 | ID | Tema | Propuesta de este spec | Bloquea |
 | --- | --- | --- | --- |
-| F5-D1 | Qué cuenta como «parece una instrucción» (hueco 6 de F0) | Una lista de señales, en inglés y español: una orden dirigida a un agente o asistente, un número de cuenta de pago, o una mención al agente junto a un verbo de acción. El texto oculto normal (menús cerrados, etiquetas para lectores de pantalla, texto de promoción) no dispara. | la detección |
+| F5-D1 | Qué cuenta como «parece una instrucción» (hueco 6 de F0) | Una lista de señales, en inglés y español: una orden dirigida a un agente o asistente, una dirección (el patrón `ADDRESS_RE`), o una mención al agente junto a un verbo de entrega o confirmación. El texto oculto normal (menús cerrados, etiquetas para lectores de pantalla, texto de promoción) no dispara. | la detección |
 | F5-D2 | Cómo se emparejan las dos listas de texto | Normalizar (minúsculas, espacios colapsados) y comparar como conjuntos de líneas. El texto que está en un canal y no en el otro es la diferencia; sobre esa diferencia se aplica el filtro F5-D1. | la detección |
 | F5-D3 | De dónde sale el «texto del código» | Del texto que la página expone (DOM y árbol de accesibilidad), que incluye lo que no se dibuja. Lo entrega F3 junto con la captura. | F3 |
 | F5-D4 | Límite conocido del filtro | Una orden redactada sin ninguna de las señales de F5-D1 no se marcaría. Se asume y se mide: WitnessBench incluye un caso así para contar cuánto se escapa. | F10 |
@@ -48,8 +50,8 @@ Fuera de alcance de F5: leer la pantalla (F4), decidir (F6). F5 compara y filtra
 Una línea de la diferencia se marca si, en inglés o español, contiene al menos una de:
 
 - una orden dirigida a un «agent», «assistant», «AI» o «agente», «asistente» (un imperativo dirigido al agente);
-- un número de cuenta de pago (el patrón de relleno de la demo y formatos de cuenta en general);
-- una mención al agente junto a un verbo de acción de pago (pagar, transferir, cambiar destinatario).
+- una dirección: el patrón de dirección (`calle|carrera|avenida|diagonal|transversal` + número `#` número `-` número, con las abreviaturas `Cl`, `Cra`, `Kr`, `Av`, `Dg`, `Tv`, `No.`, `N°`);
+- una mención al agente junto a un verbo de entrega o confirmación («deliver», «ship», «send», «entrega», «envía», «confirm», «confirma»).
 
 La lista exacta de patrones se fija y se amplía con los casos de WitnessBench. El texto de promoción, los menús y las etiquetas de accesibilidad no encajan en ninguna señal y no se marcan.
 

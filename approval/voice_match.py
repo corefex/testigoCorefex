@@ -1,22 +1,24 @@
 """F7: does the spoken confirmation match what the pixels show?
 
-The person reads the amount and recipient aloud. Voice Transcribe gives the
+The person reads the order total and the delivery destination aloud («ciento
+veinte mil pesos, entrega en Tienda Doña Marta»). Voice Transcribe gives the
 text (F7 live path); this module compares it — normalized — against the amount
-and recipient **read from the pixels** (F4), never the DOM. The amount is
-spoken in Spanish words and converted to a number.
+and the "Deliver to" text **read from the pixels** (F4), never the DOM. The
+amount is spoken in Spanish words and converted to a number.
 
 Strict on purpose (a doubt is a "no"):
 - the amount is exactly ONE continuous, well-formed number phrase ("ciento
   veinte mil", "un millón doscientos mil", or digits like "120.000"). A second
   separate number phrase ("cinco mil, ciento quince mil") or a malformed one
   ("veinte cien mil") is not a match;
-- only the phrase before the recipient's name counts (after it, if nothing
-  was said before), and account-like digit groups ("310 555 4417") are ignored,
-  so reading the account aloud never changes the amount;
-- a negation or cancel cue ("no", "no pagues", "cancela", "mejor no", "nunca",
-  "detente") rejects the confirmation.
+- only the phrase before the destination's name counts (after it, if nothing
+  was said before), and street addresses are ignored, in digits ("Calle 45 #
+  12-30") or in words ("calle cuarenta y cinco número doce treinta"), so
+  reading the address aloud never changes the amount;
+- a negation or cancel cue ("no", "no confirmes", "no lo pidas", "cancela",
+  "mejor no", "nunca", "detente") rejects the confirmation.
 
-The voice confirms the recipient's NAME, not the account digits: the account
+The voice confirms the destination's NAME, not the address digits: the address
 is checked by the pixels (F4/F5) and the signed policy (F1/F6).
 
 Pure and offline: the transcription is real (a model), the comparison is code.
@@ -24,6 +26,8 @@ Pure and offline: the transcription is real (a model), the comparison is code.
 
 import re
 import unicodedata
+
+from common.address import ADDRESS_RE, STREET_TYPES
 
 # Spanish number words up to the hundreds, plus the thousand/million multipliers.
 _UNITS = {
@@ -49,16 +53,19 @@ _WORDS = set(_UNITS) | set(_TENS) | set(_HUNDREDS) | set(_SCALES)
 
 MAX_AMOUNT = 999_999_999          # "novecientos noventa y nueve millones ..."
 
-# Words that take the confirmation back. Any of them (outside the recipient's
-# name) rejects it: "no", "no pagues", "mejor no", "cancela", "nunca", "detente".
+# Words that take the confirmation back. Any of them (outside the destination's
+# name) rejects it: "no", "no confirmes", "no lo pidas", "mejor no", "cancela",
+# "nunca", "detente".
 NEGATIONS = frozenset({
     "no", "nunca", "jamas", "cancela", "cancelar", "cancelo", "cancelen", "cancelalo",
     "cancelado", "cancelada", "detente", "detener", "deten", "detenlo", "anula",
     "anular", "anulalo", "espera", "stop",
 })
 
-# An account read aloud in digits: 310-555-4417, 310 XXX 4417, 3105554417.
-_ACCOUNT_RE = re.compile(r"(?<![\w])\d{3}[\s\-–—.]?[\dxX*]{3}[\s\-–—.]?\d{4}(?![\w])")
+# A street address read aloud in words: the street type, then its numbers
+# ("calle cuarenta y cinco número doce treinta"). Dropped with its numbers.
+_STREET_WORDS = frozenset(STREET_TYPES)
+_ADDRESS_JOINERS = ("numero", "nro", "guion", "con")
 
 
 def strip_accents(text):
@@ -72,16 +79,53 @@ def normalize(text):
 
 
 def _join_digits(text):
-    """Digits as a transcriber writes them: drop account-like groups, drop a
-    2-digit decimal part, join thousands separators ("120.000" -> "120000")."""
-    text = _ACCOUNT_RE.sub(" ", str(text or ""))
+    """Digits as a transcriber writes them: drop street addresses ("Calle 45 #
+    12-30"), drop a 2-digit decimal part, join thousands separators
+    ("120.000" -> "120000")."""
+    text = ADDRESS_RE.sub(" ", str(text or ""))
     text = re.sub(r"(?<=\d)[.,]\d{2}(?!\d)", "", text)
     return re.sub(r"(?<!\d)(\d{1,3})((?:[.,\s]\d{3})+)(?!\d)",
                   lambda m: m.group(1) + re.sub(r"\D", "", m.group(2)), text)
 
 
 def tokens(text):
-    return normalize(_join_digits(text)).split()
+    return _drop_spoken_addresses(normalize(_join_digits(text)).split())
+
+
+def _drop_spoken_addresses(toks):
+    """Remove a street word and the (up to three) small numbers that follow it
+    ("calle cuarenta y cinco numero doce treinta"): an address is never part of
+    the amount. Each number is 1-999, in words or digits, never "mil"."""
+    out, i, n = [], 0, len(toks)
+    while i < n:
+        if toks[i] in _STREET_WORDS:
+            j, groups = i + 1, 0
+            while groups < 3:
+                k = j
+                if k < n and (toks[k] in _ADDRESS_JOINERS or
+                              (toks[k] in ("no", "n") and groups == 1)):
+                    k += 1
+                v, nxt = _small_group(toks, k)
+                if v is None:
+                    break
+                j, groups = nxt, groups + 1
+            if groups:
+                i = j
+                continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
+def _small_group(toks, i):
+    """A 1-999 number at toks[i] (words or digits) not followed by a scale."""
+    if i < len(toks) and toks[i].isdigit():
+        v, nxt = (int(toks[i]), i + 1) if int(toks[i]) < 1000 else (None, i)
+    else:
+        v, nxt = _below_1000(toks, i)
+    if v is None or (nxt < len(toks) and toks[nxt] in _SCALES):
+        return None, i
+    return v, nxt
 
 
 def _is_num(tok):
@@ -90,7 +134,7 @@ def _is_num(tok):
 
 def number_phrases(toks):
     """Maximal runs of number tokens ("y" joins only between two of them). A
-    lone "un"/"una" is the article ("un pago de ..."), not a number."""
+    lone "un"/"una" is the article ("un pedido de ..."), not a number."""
     runs, cur = [], []
     for i, t in enumerate(toks):
         if _is_num(t):
@@ -183,14 +227,24 @@ def spanish_to_int(text):
     return _amount(tokens(text))[0]
 
 
-def name_of(recipient_text):
-    """The pixels read "Name · account"; the spoken confirmation uses the name."""
-    return str(recipient_text or "").split("·")[0].split(" - ")[0].strip()
+_LABEL_RE = re.compile(r"^\s*(?:deliver(?:y)? to|ship to|entregar en|entrega en|enviar a)\s*:?\s*",
+                       re.IGNORECASE)
+
+
+def name_of(address_text):
+    """The pixels read "Name · address" (maybe after a "Deliver to" label); the
+    spoken confirmation uses the name: what comes before "·", " - " or the
+    street address."""
+    text = str(address_text or "")
+    m = ADDRESS_RE.search(text)
+    if m:
+        text = text[:m.start()]
+    text = text.split("·")[0].split(" - ")[0]
+    return _LABEL_RE.sub("", text).strip(" ,;:")
 
 
 # Spanish names of consonant letters, for a one-letter word in a name
-# ("Distribuidora X" is read aloud, and may be transcribed, as "Distribuidora
-# equis"). Vowels and "de" are not letter names here: "a", "e", "o", "u", "de"
+# ("Bodega X" is read aloud, and may be transcribed, as "Bodega equis"). Vowels and "de" are not letter names here: "a", "e", "o", "u", "de"
 # are ordinary Spanish words and would match almost any sentence.
 _LETTERS = {"be": "b", "ce": "c", "efe": "f", "ge": "g", "hache": "h", "jota": "j",
             "ka": "k", "ele": "l", "eme": "m", "ene": "n", "pe": "p", "cu": "q",
@@ -212,19 +266,19 @@ def _find_name(said, name):
     return -1
 
 
-def recipient_matches(transcript, pixel_recipient_text):
-    """True when the recipient NAME read from the pixels is spoken, word by
+def address_matches(transcript, pixel_address_text):
+    """True when the destination NAME read from the pixels is spoken, word by
     word and in order (a one-letter word may be said by its consonant letter
-    name). The account digits are not part of it."""
-    return _find_name(tokens(transcript), normalize(name_of(pixel_recipient_text)).split()) >= 0
+    name). The address digits are not part of it."""
+    return _find_name(tokens(transcript), normalize(name_of(pixel_address_text)).split()) >= 0
 
 
-def heard_amount(transcript, pixel_recipient_text=None):
-    """(value or None, reason). Only the amount phrase before the recipient's
-    name counts; after it only when nothing was said before (so an account
-    number read after the name cannot change the amount)."""
+def heard_amount(transcript, pixel_address_text=None):
+    """(value or None, reason). Only the amount phrase before the destination's
+    name counts; after it only when nothing was said before (so an address
+    read after the name cannot change the amount)."""
     toks = tokens(transcript)
-    name = normalize(name_of(pixel_recipient_text)).split() if pixel_recipient_text else []
+    name = normalize(name_of(pixel_address_text)).split() if pixel_address_text else []
     at = _find_name(toks, name)
     if at < 0:
         return _amount(toks)
@@ -234,10 +288,11 @@ def heard_amount(transcript, pixel_recipient_text=None):
     return _amount(after)
 
 
-def negated(transcript, pixel_recipient_text=None):
-    """The negation/cancel words heard outside the recipient's name."""
-    name = set(normalize(name_of(pixel_recipient_text)).split()) if pixel_recipient_text else set()
-    return [t for t in normalize(transcript).split() if t in NEGATIONS and t not in name]
+def negated(transcript, pixel_address_text=None):
+    """The negation/cancel words heard outside the destination's name (a "No."
+    inside a street address is not one)."""
+    name = set(normalize(name_of(pixel_address_text)).split()) if pixel_address_text else set()
+    return [t for t in tokens(transcript) if t in NEGATIONS and t not in name]
 
 
 def amount_in_range(pixel_amount_cop):
@@ -247,11 +302,11 @@ def amount_in_range(pixel_amount_cop):
         return False
 
 
-def amount_check(transcript, pixel_amount_cop, pixel_recipient_text=None):
+def amount_check(transcript, pixel_amount_cop, pixel_address_text=None):
     """(ok, heard value or None, reason when not ok)."""
     if not amount_in_range(pixel_amount_cop):
         return False, None, "amount out of range (voice supports 1 to %s)" % format(MAX_AMOUNT, ",")
-    v, why = heard_amount(transcript, pixel_recipient_text)
+    v, why = heard_amount(transcript, pixel_address_text)
     if v is None:
         return False, None, why
     if v != int(pixel_amount_cop):
@@ -259,24 +314,24 @@ def amount_check(transcript, pixel_amount_cop, pixel_recipient_text=None):
     return True, v, ""
 
 
-def amount_matches(transcript, pixel_amount_cop, pixel_recipient_text=None):
+def amount_matches(transcript, pixel_amount_cop, pixel_address_text=None):
     """True when the one amount spoken equals the amount read from the pixels."""
-    return amount_check(transcript, pixel_amount_cop, pixel_recipient_text)[0]
+    return amount_check(transcript, pixel_amount_cop, pixel_address_text)[0]
 
 
-def voice_matches(transcript, pixel_amount_cop, pixel_recipient_text):
-    """Both the amount and the recipient must match, with no negation.
+def voice_matches(transcript, pixel_amount_cop, pixel_address_text):
+    """Both the amount and the destination's name must match, with no negation.
     Returns (ok, detail)."""
-    neg = negated(transcript, pixel_recipient_text)
+    neg = negated(transcript, pixel_address_text)
     if neg:
         return False, "does not match: negation heard (%s)" % " ".join(neg)
-    amt, _v, why = amount_check(transcript, pixel_amount_cop, pixel_recipient_text)
-    rec = recipient_matches(transcript, pixel_recipient_text)
+    amt, _v, why = amount_check(transcript, pixel_amount_cop, pixel_address_text)
+    rec = address_matches(transcript, pixel_address_text)
     if amt and rec:
-        return True, "amount and recipient match"
+        return True, "amount and destination match"
     missing = []
     if not amt:
         missing.append("amount (%s)" % why)
     if not rec:
-        missing.append("recipient")
+        missing.append("destination")
     return False, "does not match: " + ", ".join(missing)

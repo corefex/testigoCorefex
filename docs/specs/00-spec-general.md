@@ -4,19 +4,21 @@
 
 TESTIGO+ es un supervisor independiente para agentes de IA que usan el computador: comprueba en los píxeles que lo que el agente pidió, lo que la persona aprobó y lo que se ejecutó son lo mismo. Este documento es la base de todos los demás specs.
 
+> **1 nov:** R2 decidido. Hasta el 31 de oct el escenario protegía un pago; desde el 1 de nov protege **la dirección de entrega de un pedido a proveedor** (ver `03-revision-31-oct.md` §10).
+
 ## Qué es TESTIGO+
 
-**El problema.** Los agentes de IA ya pueden usar un computador solos: abren páginas, rellenan formularios y hacen pagos. Muse Wonder, el modelo nuevo de Meta, lo hace y avisa antes de las acciones importantes. Pero una página puede traer escondida una orden para el agente («cambia la cuenta de destino») y el agente puede obedecerla. Hoy se confía en dos cosas que un atacante puede manipular: lo que el agente cuenta que va a hacer y el código interno de la página.
+**El problema.** Los agentes de IA ya pueden usar un computador solos: abren páginas, rellenan formularios y hacen pedidos. Muse Wonder, el modelo nuevo de Meta, lo hace y avisa antes de las acciones importantes. Pero una página puede traer escondida una orden para el agente («cambia la dirección de entrega») y el agente puede obedecerla. Hoy se confía en dos cosas que un atacante puede manipular: lo que el agente cuenta que va a hacer y el código interno de la página.
 
 **La idea.** TESTIGO+ se pone entre el agente y el navegador. No confía en el agente ni en el código de la página: mira los píxeles de la pantalla, como lo haría una persona, y comprueba tres cosas:
 
-1. Lo que el agente va a pagar es lo que la política permite.
+1. El pedido que el agente va a confirmar es lo que la política permite: entrega en la tienda y total dentro del límite.
 2. La persona aprobó exactamente eso, viendo recortes reales de la pantalla.
 3. Después del clic, lo que se ejecutó es lo que se aprobó.
 
 Si algo no coincide, bloquea. Al final deja un recibo firmado que cualquiera puede verificar sin confiar en nosotros.
 
-**La historia de la demo.** Doña Marta tiene una tienda en Bogotá y su agente le repone el inventario pagando a Distribuidora X en un portal. Sin TESTIGO+, una orden escondida cambia la cuenta y el dinero se va. Con TESTIGO+, el ataque se bloquea. Todo es una simulación: no hay dinero ni cuentas reales.
+**La historia de la demo.** Doña Marta tiene una tienda en Bogotá y su agente le repone el inventario con un pedido a Distribuidora X en un portal. Sin TESTIGO+, una orden escondida cambia la dirección de entrega a la bodega del atacante y la mercancía se pierde. Con TESTIGO+, el ataque se bloquea. Todo es una simulación: el portal, las direcciones y el pedido son ficticios.
 
 **Qué ya existe y qué es nuevo** (verificado el 28 de octubre de 2026):
 
@@ -34,7 +36,7 @@ La novedad se apoya en que unas 13 búsquedas dedicadas no encontraron anteceden
 
 | Criterio | Peso | Qué tiene que ver el jurado |
 | --- | --- | --- |
-| Impacto | 30 % | Un problema real y con dinero detrás (agentes que manejan pagos), contado con una persona concreta: Doña Marta. |
+| Impacto | 30 % | Un problema real y con dinero detrás (agentes que hacen pedidos a proveedores; un pedido desviado es mercancía perdida), contado con una persona concreta: Doña Marta. |
 | Uso de herramientas de Meta | 25 % | Wonder como agente vigilado; SAM como canal de píxeles; Voice para confirmar; Spark para leer la pantalla y compilar la política (Glimmer en local solo si hay una GPU de 24 GB). Cada una con un trabajo necesario. |
 | Profundidad técnica y ejecución | 20 % | Canal de píxeles independiente, firmas, benchmark propio con resultados reales. |
 | Demo | 25 % | El ataque bloqueado en vivo y un número: cuántos ataques funcionan sin y con TESTIGO+ (conteos, R9). |
@@ -63,13 +65,13 @@ Estas salen de la guía del participante, del documento de exención, de la docu
 | Regla | Qué implica para nosotros | Estado |
 | --- | --- | --- |
 | Fechas | Hackathon del 26 de octubre al 4 de noviembre de 2026. Entrega el 4 de noviembre a las 9 PM ET (9 PM en Bogotá). | Verificado |
-| Equipos | Máximo 4 personas en el track Indie según fuentes secundarias; para el track Startup no encontramos un límite publicado. El equipo tiene 6. | **Por confirmar hoy en Discord (R1)**. Si el límite es 4, solo 4 se registran y hacen commits |
+| Equipos | Máximo 4 personas en el track Indie según fuentes secundarias; para el track Startup no encontramos un límite publicado. El equipo tiene 5 personas. | **Por confirmar en Discord (R1)**. Si el límite es 4, solo 4 se registran y solo esas 4 hacen commits |
 | Trabajo nuevo | Todo debe construirse durante el evento. El código debe ser del equipo; la exención permite ayuda técnica de terceros si los componentes siguen siendo del equipo y de código abierto con sus licencias respetadas. | Verificado |
 | Repositorio público | Es obligatorio. Las llaves de firma y las claves de API no pueden ir al repositorio. | Verificado |
 | Video | De 3 minutos y es lo que se ve en la etapa final. | Verificado |
 | Modelos de Meta | El proyecto debe usar de verdad modelos de Meta. Muse Code es opcional. | Verificado |
 | Proyectos a evitar | Asesoría médica con IA, RAG básico, analizadores simples de imágenes, aplicaciones Streamlit, dashboards como función principal, chatbots educativos, filtros de CVs, coaches de nutrición, analizadores de personalidad y analizadores deportivos. | Verificado |
-| Cuentas y créditos | USD 150 por participante en la API de Meta, con tarjeta propia; cada uno reclama los suyos antes del 4 de noviembre a las 9 PM ET. Baseten, Modal y Fireworks dan créditos extra solo a algunos participantes. | Verificado. No sabemos si los créditos de dos cuentas se pueden juntar |
+| Créditos de la API | USD 150 por participante en la API de Meta; cada uno reclama los suyos antes del 4 de noviembre a las 9 PM ET. Baseten, Modal y Fireworks dan créditos extra solo a algunos participantes. | Verificado. No sabemos si los créditos de dos personas se pueden juntar |
 | Datos de entrenamiento | Las suscripciones de Muse Code vienen en modo «Contributor», que entrena con los datos; no usarlo con material sensible. | Verificado |
 | Acceso desde Colombia | La política geográfica no lista a Colombia como restringida, pero hay que probar con una llamada real desde Bogotá. | Verificado en el texto; falta la prueba |
 | Asistentes de código externos (como Claude Code) | No vimos una regla en contra ni a favor. | No confirmado: preguntar en Discord (#questions) |
@@ -91,7 +93,7 @@ Estas salen de la guía del participante, del documento de exención, de la docu
 
 | Entra en el MVP | No entra | Es simulado |
 | --- | --- | --- |
-| Un portal de proveedor con un solo flujo: pagar un pedido en dos pasos (revisar y confirmar). Wonder lo maneja con un navegador controlado. Los 3 ataques. Política por voz. Aprobación con voz (passkey opcional, R8). Verificación antes de confirmar y después del clic. Recibos firmados y `verify`. WitnessBench con 20 corridas. Una interfaz basada en las vistas del diseño. | Integraciones con bancos, Nequi u otras cuentas reales. Aplicación móvil. Varios proveedores o flujos. Entrenar modelos propios. Un panel de control como función principal. Cualquier dato de un empleador. | El portal y el pago, los datos de Doña Marta, la cuenta del atacante y el dinero. Es real el agente, la detección, la aprobación, la firma del recibo y la medición. |
+| Un portal de proveedor con un solo flujo: confirmar un pedido en dos pasos (revisar y confirmar), con la dirección de entrega editable. Wonder lo maneja con un navegador controlado. Los 3 ataques. Política por voz. Aprobación con voz (passkey opcional, R8). Verificación antes de confirmar y después del clic. Recibos firmados y `verify`. WitnessBench con 20 corridas. Una interfaz basada en las vistas del diseño. | Dinero de cualquier tipo: el portal no cobra. Integraciones con proveedores o transportadoras reales. Aplicación móvil. Varios proveedores o flujos. Entrenar modelos propios. Un panel de control como función principal. Cualquier dato de un empleador. | El portal y el pedido, los datos de Doña Marta, la dirección de la tienda y la bodega del atacante. Es real el agente, la detección, la aprobación, la firma del recibo y la medición. |
 
 Decisión de fondo: si hay que recortar, se recorta ancho y no profundidad. Es mejor un flujo que se mide bien que varios que se ven bien.
 
@@ -101,15 +103,15 @@ TESTIGO+ se pone entre el agente y el navegador: ninguna acción de Wonder llega
 
 1. Wonder recibe una captura del portal y propone una acción (por ejemplo, un clic).
 2. El interceptor detiene la acción y toma la captura y el texto visible del código de la página.
-3. SAM marca monto, destinatario y botón. Spark lee el contenido de esos recortes y el texto de toda la captura, solo como extracción con formato fijo.
-4. Se compara el texto del código con el texto de toda la captura, y el monto y el destinatario con la política. Si algo falla, se bloquea.
-5. Si es un pago y todo cumple, se pide la aprobación con los recortes y la voz (el passkey es opcional, R8). Esta cápsula es la que responde la pregunta que Wonder hace antes de una acción importante.
-6. El pago tiene dos pasos. En la pantalla de revisión, antes del clic final de confirmar, TESTIGO+ vuelve a capturar y comprueba que lo que se va a ejecutar coincide con lo aprobado; si no coincide, bloquea.
+3. SAM marca monto, dirección de entrega y botón. Spark lee el contenido de esos recortes y el texto de toda la captura, solo como extracción con formato fijo.
+4. Se compara el texto del código con el texto de toda la captura, y el monto y la dirección con la política. Si algo falla, se bloquea.
+5. Si la acción confirma el pedido y todo cumple, se pide la aprobación con los recortes y la voz (el passkey es opcional, R8). Esta cápsula es la que responde la pregunta que Wonder hace antes de una acción importante.
+6. El pedido tiene dos pasos. En la pantalla de revisión, antes del clic final de confirmar, TESTIGO+ vuelve a capturar y comprueba que lo que se va a ejecutar coincide con lo aprobado; si no coincide, bloquea.
 7. Después de confirmar, vuelve a capturar el resultado, lo compara y firma un recibo con los hashes de los recortes.
 
 **Regla para el verificador.** Spark también lee la página, así que podría caer en la misma orden escondida. Por eso Spark solo devuelve texto y cajas en un formato fijo, nunca recibe instrucciones de la página, y la decisión la toman reglas en código, no otro modelo.
 
-**Texto oculto legítimo.** Las páginas normales tienen texto que no se ve (menús cerrados, texto para lectores de pantalla). Solo se marca como divergencia el texto oculto o pintado que parece una instrucción para el agente: órdenes, números de cuenta o menciones al agente.
+**Texto oculto legítimo.** Las páginas normales tienen texto que no se ve (menús cerrados, texto para lectores de pantalla). Solo se marca como divergencia el texto oculto o pintado que parece una instrucción para el agente: órdenes, direcciones o menciones al agente.
 
 **Las vistas ya diseñadas.** Están en el lienzo de Claude Design (20 pantallas, con sus variantes de estado): https://claude.ai/artifact/SoZszjAzJTnYJvehGp1dJ7. La interfaz real las usa como guía, con una diferencia: cada dato sale de un evento del sistema y no está escrito a mano. Las correcciones pendientes de las maquetas están en el documento «Spec de construcción: portal y vistas reales» (`01-spec-construccion.md`).
 
@@ -118,7 +120,7 @@ TESTIGO+ se pone entre el agente y el navegador: ninguna acción de Wonder llega
 | Portada | Cover | F11 |
 | 1 Mandato | 1a escuchando, 1b transcribiendo, 1c política firmada | F1 |
 | 2 Agente trabajando | 2a en marcha, 2b en pausa | F3 |
-| 3 Sin TESTIGO+ | 3a orden oculta, 3b pago enviado | F2 y F3 |
+| 3 Sin TESTIGO+ | 3a orden oculta, 3b pedido desviado | F2 y F3 |
 | 4 Divergencia | 4a sin diferencia, 4b texto visible que no está en el código, 4c texto del código que no se ve; falta 4d «no se puede verificar» | F4, F5 y F6 |
 | 5 Aprobación | 5a esperando voz, 5b coincide, 5c no coincide, 5d aprobado | F7 |
 | 6 Después del clic | 6a verificado, 6b no coincide | F8 |
@@ -131,11 +133,11 @@ Cada feature tendrá su propio spec con: objetivo, entradas y salidas, criterios
 
 | ID | Feature | Qué hace | Herramienta de Meta | Depende de |
 | --- | --- | --- | --- | --- |
-| F0 | Infraestructura | Estructura del repositorio, instalación, claves y secretos fuera del repo, cuentas y créditos, ramas y commits por persona, cómo se prueba. | — | — |
+| F0 | Infraestructura | Estructura del repositorio, instalación, claves y secretos fuera del repo, créditos de la API, ramas y commits por persona, cómo se prueba. | — | — |
 | F1 | Mandato por voz y política | La dueña dice qué puede hacer el agente y queda una política firmada. | Voice Transcribe, Spark (Glimmer opcional) | F0 |
-| F2 | Portal simulado y ataques | Página de Distribuidora X con pago en dos pasos (revisar y confirmar), los escenarios sin ataque, A1, A2 y A3, y un registro de pagos. | — | F0 |
+| F2 | Portal simulado y ataques | Página de Distribuidora X con pedido en dos pasos (revisar y confirmar), los escenarios sin ataque, A1, A2 y A3, y un registro de pedidos. | — | F0 |
 | F3 | Agente y navegador | Wonder maneja el portal con Playwright; se puede correr con o sin supervisor. | Wonder (Spark para desarrollar) | F0, F2 |
-| F4 | Canal de píxeles | Marca monto, destinatario y botón en la captura y lee su contenido. | SAM 3.1, Spark 1.3 | F3 |
+| F4 | Canal de píxeles | Marca monto, dirección de entrega y botón en la captura y lee su contenido. | SAM 3.1, Spark 1.3 | F3 |
 | F5 | Comparación código y píxeles | Lee el texto de toda la captura y encuentra texto del código que no se ve y texto visible que no está en el código, filtrando lo que no parece una instrucción. | Spark 1.3 | F4 |
 | F6 | Motor de decisión | Aplica la política y las reglas: permitir, pedir aprobación, bloquear o «no se puede verificar». | — | F1, F4, F5 |
 | F7 | Aprobación | Cápsula con recortes reales, lectura en voz alta y passkey opcional (R8). | Voice Transcribe | F6 |
@@ -149,6 +151,8 @@ Orden de escritura de los specs: F0, luego F2 y F3 (lo que el gate de hoy pone a
 ## Estado actual, riesgos y gate
 
 > **31 de octubre:** el estado real del código, las decisiones R1 a R11 y el calendario nuevo están en `03-revision-31-oct.md`, que manda sobre este documento donde lo contradiga.
+>
+> **1 de noviembre:** R2 decidido (opción A, dirección de entrega; contrato en `03-revision-31-oct.md` §10). R3 (bucle de varias acciones) aprobado e implementado. F4-D5 aprobado. R1 sigue abierto: el equipo tiene 5 personas y el límite del track está sin confirmar (Indie, máximo 4 según fuentes secundarias; Startup, sin límite publicado). Confirmar en Discord; si el límite es 4, solo 4 se registran y solo esas 4 hacen commits. Los resultados de WitnessBench del 31 de oct eran del dominio anterior: pendiente: se vuelve a medir en el dominio de entrega.
 
 **Código que ya existe** (en la carpeta `testigo/`, revisado el 28 de octubre): portal con escenarios, núcleo del interceptor con reglas, bucle del agente con un agente de guion, recibos con firma y `verify`, y una política de ejemplo. Corre sin conexión y con datos de prueba. **No usa todavía ningún modelo de Meta ni Playwright**, no tenía interfaz ni repositorio git (hoy ya existen ambos, ver `03-revision-31-oct.md`), y las imágenes de evidencia son archivos de relleno de 21 bytes. Cada spec de feature decide qué de esto se conserva. No se escribe más código hasta tener el spec de infraestructura.
 
@@ -162,8 +166,8 @@ Orden de escritura de los specs: F0, luego F2 y F3 (lo que el gate de hoy pone a
 | Wonder no se puede interceptar por la API | No hay agente real que vigilar. | Es la prueba que decide si seguimos; si falla, reconsiderar el enfoque. |
 | Falsos positivos por texto oculto legítimo | TESTIGO+ bloquea páginas normales. | Marcar solo el texto que parece una instrucción; medir en los 5 casos sin ataque. |
 | No hay GPU de 24 GB para Glimmer | No se puede correr la política en local. | Usar Spark por API; Glimmer queda como opcional. |
-| Latencia alta | La demo se siente lenta. | Medirla y mostrarla; limitar las comprobaciones a las acciones de pago. |
-| Dominio de pagos | Un miembro del equipo trabaja en un banco con exclusividad y el equipo había excluido pagos. | Decisión R2: proteger la dirección de entrega de un pedido en vez de la cuenta de pago (el motor no cambia), o mantener pagos tras revisar el contrato. |
+| Latencia alta | La demo se siente lenta. | Medirla y mostrarla; limitar las comprobaciones a las acciones sensibles (revisar y confirmar el pedido). |
+| Dominio del escenario | Un miembro del equipo tiene exclusividad laboral en su dominio y el equipo lo había excluido. | **Resuelto el 1 de nov (R2, opción A):** se protege la dirección de entrega de un pedido. |
 | Integración atrasada | Al 31 de oct ningún modelo de Meta está conectado y el gate del 28 no está aprobado. | Calendario nuevo con cortes diarios en `03-revision-31-oct.md` §3. |
 | Costo del benchmark | Se acaban los créditos. | Desarrollar con Spark 1.3 y usar Wonder solo para pruebas de integración y la corrida final. |
 | Reglas de asistentes de código | Riesgo de descalificación por contribución poco clara. | Preguntar en Discord; commits hechos por personas del equipo. |

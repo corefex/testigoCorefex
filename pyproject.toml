@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "testigo"
 version = "0.1.0"
-description = "TESTIGO+: an independent, pixel-level witness for computer-use AI agents (simulated payments)."
+description = "TESTIGO+: an independent, pixel-level witness for computer-use AI agents (simulated supplier orders, protected delivery address)."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"

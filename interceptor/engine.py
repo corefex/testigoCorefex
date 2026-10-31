@@ -6,20 +6,20 @@ whole demo turns on, so it is kept pure: it takes a Capture and a PixelChannel,
 returns events, and talks to no browser, model or network itself.
 
 Rules (spec order):
-  1. SAM cannot find amount, recipient or the pay button with confidence
+  1. SAM cannot find amount, address or the confirm button with confidence
         -> cannot_verify, block.
   2. Text in the page code that is not drawn, or drawn text not in the code
         -> divergence, block.
-  3. Recipient or amount read from the pixels breaks the policy
+  3. Delivery address or total read from the pixels breaks the policy
         -> policy_violation, block.
-  4. Everything agrees and the action is a payment
+  4. Everything agrees and the action confirms the order
         -> needs approval (voice + passkey).
   5. After the click, executed crops differ from the approved crops
         -> mismatch, the receipt is flagged.
 
-"Read from the pixels" everywhere: the recipient and amount used for the policy
+"Read from the pixels" everywhere: the address and amount used for the policy
 check come from the pixel channel, never from the DOM, so a hidden or swapped
-value cannot slip a payment through.
+value cannot slip an order through.
 """
 
 import re
@@ -44,7 +44,7 @@ class Decision:
 
     @property
     def allowed_now(self):
-        """True only for a non-payment action that passed every check."""
+        """True only for a non-confirming action that passed every check."""
         return not self.blocked and not self.needs_approval
 
 
@@ -57,7 +57,7 @@ class Interceptor:
     # -- pre-action ---------------------------------------------------------
 
     def check(self, action, capture, latency_ms=None):
-        """Decide on a proposed action. `action` is {"kind": "pay"|"click"|"type", ...}."""
+        """Decide on a proposed action. `action` is {"kind": "confirm"|"click"|"type", ...}."""
         t0 = time.perf_counter()
         regions = self.pixels.read_regions(capture)
         by_label = {r["label"]: r for r in regions}
@@ -88,21 +88,21 @@ class Interceptor:
                 reason=reason,
             )
 
-        # Rule 3a: an account the policy does not allow is painted on the screen
+        # Rule 3a: an address the policy does not allow is painted on the screen
         # (a decoy next to the real field, review of F4). The pixels decide.
-        stray = self._stray_accounts(capture.rendered_lines)
+        stray = self._stray_addresses(capture.rendered_lines)
         if stray:
-            why = "an account not in the pay-only list is on screen: %s" % ", ".join(stray)
+            why = "an address not in the deliver-only list is on screen: %s" % ", ".join(stray)
             return Decision(
                 ev.POLICY_VIOLATION, True,
                 ev.check_result(capture.frame, ev.POLICY_VIOLATION, regions, [], [], lat, why),
                 reason=why,
             )
 
-        # Rule 3: policy violation (recipient/amount read from pixels)
-        recipient_text = by_label["recipient"]["text"]
+        # Rule 3: policy violation (address/amount read from pixels)
+        address_text = by_label["address"]["text"]
         amount_cop = _amount_from(by_label["amount"]["text"])
-        ok, why = self.policy.check_payment(recipient_text, amount_cop)
+        ok, why = self.policy.check_order(address_text, amount_cop)
         if not ok:
             return Decision(
                 ev.POLICY_VIOLATION, True,
@@ -110,13 +110,13 @@ class Interceptor:
                 reason=why,
             )
 
-        # Rule 4: ok. A payment needs approval; anything else is allowed.
+        # Rule 4: ok. Confirming the order needs approval; anything else is allowed.
         check_ev = ev.check_result(capture.frame, ev.OK, regions, [], [], lat, "")
-        if _is_payment(action):
+        if _is_confirm(action):
             crop_amt = sha_crop(capture.crops.get("amount", b""))
-            crop_rec = sha_crop(capture.crops.get("recipient", b""))
+            crop_rec = sha_crop(capture.crops.get("address", b""))
             approval = ev.approval_requested(
-                capture.frame, amount_cop, recipient_text, crop_amt, crop_rec)
+                capture.frame, amount_cop, address_text, crop_amt, crop_rec)
             return Decision(ev.OK, False, check_ev, approval_event=approval,
                             needs_approval=True)
         return Decision(ev.OK, False, check_ev)
@@ -126,31 +126,31 @@ class Interceptor:
     def verify(self, approved_crops, executed_capture):
         """Rule 5: compare what executed against what was approved.
 
-        approved_crops: {"amount": sha, "recipient": sha} from approval time.
+        approved_crops: {"amount": sha, "address": sha} from approval time.
         Returns a verify.result event; status is match or mismatch.
         """
         executed = {
             "amount": sha_crop(executed_capture.crops.get("amount", b"")),
-            "recipient": sha_crop(executed_capture.crops.get("recipient", b"")),
+            "address": sha_crop(executed_capture.crops.get("address", b"")),
         }
         status = ev.MATCH
         if (executed["amount"] != approved_crops.get("amount") or
-                executed["recipient"] != approved_crops.get("recipient")):
+                executed["address"] != approved_crops.get("address")):
             status = ev.MISMATCH
         return ev.verify_result(executed_capture.frame, status, dict(approved_crops), executed)
 
     def reread(self, approved_read, approved_hashes, capture, moment):
-        """F8: read amount and recipient again and compare with what was approved.
+        """F8: read amount and address again and compare with what was approved.
 
         Compared by the values read from the pixels (receipts.receipt.norm_read:
-        the amount's digits, the recipient's account numbers), because crops of
+        the amount's digits, the canonical delivery addresses), because crops of
         unchanged content never hash the same across two real captures. The
         hashes travel along as evidence. Returns (verify.result event, read)."""
         from receipts.receipt import norm_read
         by = {r["label"]: r for r in self.pixels.read_regions(capture)}
-        read = {n: by[n]["text"] for n in ("amount", "recipient")
+        read = {n: by[n]["text"] for n in ("amount", "address")
                 if n in by and by[n].get("confidence", 0) >= self.confidence_min}
-        executed = {n: sha_crop(capture.crops[n]) for n in ("amount", "recipient")
+        executed = {n: sha_crop(capture.crops[n]) for n in ("amount", "address")
                     if capture.crops.get(n)}
         if any(norm_read(n, approved_read.get(n)) != norm_read(n, read[n]) for n in read):
             status = ev.MISMATCH           # any field read and different: proven
@@ -164,16 +164,16 @@ class Interceptor:
 
     # -- helpers ------------------------------------------------------------
 
-    def _stray_accounts(self, lines):
-        from receipts.receipt import ACCOUNT_RE, norm_read
-        allowed = self.policy.allowed_accounts()
+    def _stray_addresses(self, lines):
+        from receipts.receipt import ADDRESS_RE, norm_read
+        allowed = self.policy.allowed_addresses()
         seen = []
         for line in lines:
-            if not ACCOUNT_RE.search(str(line)):
+            if not ADDRESS_RE.search(str(line)):
                 continue
-            for acct in norm_read("recipient", line).split(","):
-                if acct and acct not in allowed and acct not in seen:
-                    seen.append(acct)
+            for addr in norm_read("address", line).split(","):
+                if addr and addr not in allowed and addr not in seen:
+                    seen.append(addr)
         return seen
 
     def _confidence_gaps(self, by_label):
@@ -206,9 +206,9 @@ def _compact_all(lines):
 
 def _covered(line, other):
     """Every word of `line` is somewhere in the other channel. A reader may join
-    on one line what the DOM keeps apart (the account field's value and the
+    on one line what the DOM keeps apart (the address field's value and the
     name beside it, 31 Oct), so whole lines are not compared; an instruction
-    still shows, because its words (the attacker's account, "agent") are not
+    still shows, because its words (the attacker's address, "agent") are not
     in the other channel at all."""
     words = [_compact(w) for w in str(line).split()]
     words = [w for w in words if w]
@@ -234,8 +234,8 @@ def _amount_from(text):
     return int(digits) if digits else 0
 
 
-def _is_payment(action):
-    return action.get("kind") == "pay"
+def _is_confirm(action):
+    return action.get("kind") == "confirm"
 
 
 def _cannot_reason(missing, low, cmin):

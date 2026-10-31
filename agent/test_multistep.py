@@ -8,13 +8,13 @@ import unittest
 from types import SimpleNamespace as NS
 
 from agent.agent import Agent, WonderAgent, parse_action
-from agent.driver import BrowserDriver, SUPPLIER_ACCT, _key
+from agent.driver import BrowserDriver, SHOP_ADDRESS, _key
 from agent.loop import MAX_STEPS, run
 from interceptor.channels import Capture
 from interceptor.sensitive import SamButtons
 from tests.fixtures import captures as fx
 
-PAY_BOX = [754, 700, 923, 747]
+CONFIRM_BOX = [754, 700, 923, 747]
 
 
 def png_bytes():
@@ -26,14 +26,14 @@ def png_bytes():
 
 
 class StepDriver(BrowserDriver):
-    """A page that pays when the pay button area is clicked."""
+    """A page that confirms the order when the confirm button area is clicked."""
     is_test_double = True
     scenario, variant = "clean", 1
 
     def __init__(self):
         self.frame = 0
         self.ran = []
-        self._payment = None
+        self._order = None
 
     def observe(self):
         self.frame += 1
@@ -45,14 +45,14 @@ class StepDriver(BrowserDriver):
     def execute(self, action):
         self.ran.append(action["kind"])
         if action["kind"] == "click" and 754 <= action["x"] <= 923 and 700 <= action["y"] <= 747:
-            self._payment = {"recipient": SUPPLIER_ACCT, "amount_cop": 120000}
+            self._order = {"address": SHOP_ADDRESS, "amount_cop": 120000}
 
     def observe_after(self):
         return self.observe()
 
     @property
-    def last_payment(self):
-        return self._payment
+    def last_order(self):
+        return self._order
 
 
 class Script(Agent):
@@ -78,19 +78,19 @@ def kinds(out):
 
 
 class LoopTests(unittest.TestCase):
-    def test_several_steps_until_payment(self):
+    def test_several_steps_until_the_order_is_confirmed(self):
         drv = StepDriver()
         agent = Script([{"kind": "click", "x": 100, "y": 330}, {"kind": "type", "text": "x"},
                         {"kind": "click", "x": 838, "y": 722}])
         out = run(drv, agent, supervised=False)
         self.assertEqual(drv.ran, ["click", "type", "click"])
         self.assertEqual(out.actions, 3)
-        self.assertEqual(out.payment["recipient"], SUPPLIER_ACCT)
+        self.assertEqual(out.order["address"], SHOP_ADDRESS)
         self.assertEqual(agent.results, ["executed"] * 3)
 
     def test_done_ends_the_run_without_executing(self):
         drv = StepDriver()
-        out = run(drv, Script([{"kind": "done", "rationale": "nothing to pay"}]), supervised=False)
+        out = run(drv, Script([{"kind": "done", "rationale": "nothing to order"}]), supervised=False)
         self.assertTrue(out.finished)
         self.assertEqual(drv.ran, [])
 
@@ -113,17 +113,17 @@ class LoopTests(unittest.TestCase):
         drv = StepDriver()
         agent = Script([{"kind": "click", "x": 100, "y": 330}, {"kind": "scroll", "x": 1, "y": 1, "dy": 5},
                         {"kind": "click", "x": 838, "y": 722}])
-        out = run(drv, agent, supervised=True, sensitive=SamButtons(sam({"pay button": [{"box": PAY_BOX}]})))
+        out = run(drv, agent, supervised=True, sensitive=SamButtons(sam({"confirm button": [{"box": CONFIRM_BOX}]})))
         self.assertEqual(out.intercepted, out.actions)
-        self.assertEqual(out.checked, 1)                 # only the pay click
+        self.assertEqual(out.checked, 1)                 # only the confirm click
         self.assertIn("check.result", kinds(out))
-        self.assertTrue(out.payment)
+        self.assertTrue(out.order)
 
     def test_supervised_block_stops_before_the_browser(self):
         drv = StepDriver()
         drv.pixel_channel = lambda: fx.channel_for("blurred")      # cannot_verify
         agent = Script([{"kind": "click", "x": 838, "y": 722}])
-        out = run(drv, agent, supervised=True, sensitive=SamButtons(sam({"pay button": [{"box": PAY_BOX}]})))
+        out = run(drv, agent, supervised=True, sensitive=SamButtons(sam({"confirm button": [{"box": CONFIRM_BOX}]})))
         self.assertTrue(out.blocked)
         self.assertEqual(drv.ran, [])
 
@@ -131,27 +131,27 @@ class LoopTests(unittest.TestCase):
 class SensitiveTests(unittest.TestCase):
     cap = Capture(1, [], [], {}, screenshot=b"png")
 
-    def test_click_inside_pay_box_is_sensitive(self):
-        ok, why = SamButtons(sam({"pay button": [{"box": PAY_BOX}]}))({"kind": "click", "x": 838, "y": 722}, self.cap)
-        self.assertEqual((ok, why), (True, "click on pay button"))
+    def test_click_inside_confirm_box_is_sensitive(self):
+        ok, why = SamButtons(sam({"confirm button": [{"box": CONFIRM_BOX}]}))({"kind": "click", "x": 838, "y": 722}, self.cap)
+        self.assertEqual((ok, why), (True, "click on confirm button"))
 
     def test_click_elsewhere_and_typing_are_not(self):
-        cls = SamButtons(sam({"pay button": [{"box": PAY_BOX}]}))
+        cls = SamButtons(sam({"confirm button": [{"box": CONFIRM_BOX}]}))
         self.assertFalse(cls({"kind": "click", "x": 100, "y": 330}, self.cap)[0])
         self.assertFalse(cls({"kind": "type", "text": "hola"}, self.cap)[0])
 
-    def test_label_only_skips_known_non_payments(self):
-        boxes = sam({"pay button": [{"box": PAY_BOX}]})
+    def test_label_only_skips_known_non_confirming_buttons(self):
+        boxes = sam({"confirm button": [{"box": CONFIRM_BOX}]})
         click = {"kind": "click", "x": 838, "y": 722}
         cap = Capture(1, [], [], {}, screenshot=png_bytes())
         self.assertFalse(SamButtons(boxes, read=lambda c: "Add order items")(click, cap)[0])
-        for label in ("Continuar", "Confirm payment", "Review payment", "Place order", ""):
+        for label in ("Continuar", "Confirm order", "Review order", "Place order", ""):
             self.assertTrue(SamButtons(boxes, read=lambda c, l=label: l)(click, cap)[0], label)
 
     def test_submit_keys_and_newlines_are_sensitive(self):
         cls = SamButtons(sam({}))
         self.assertTrue(cls({"kind": "keypress", "keys": ["Enter"]}, self.cap)[0])
-        self.assertTrue(cls({"kind": "type", "text": "310-XXX-4417\n"}, self.cap)[0])
+        self.assertTrue(cls({"kind": "type", "text": "Carrera 80 # 7-15\n"}, self.cap)[0])
         self.assertFalse(cls({"kind": "keypress", "keys": ["End"]}, self.cap)[0])
         self.assertTrue(cls({"kind": "keypress", "keys": ["Control+Enter"]}, self.cap)[0])
         self.assertTrue(cls({"kind": "keypress", "keys": ["NumpadEnter"]}, self.cap)[0])
@@ -159,9 +159,9 @@ class SensitiveTests(unittest.TestCase):
 
     def test_no_button_found_counts_as_sensitive(self):
         self.assertTrue(SamButtons(sam({}))({"kind": "click", "x": 5, "y": 5}, self.cap)[0])
-        boxes = sam({"pay button": [{"box": PAY_BOX}]})
+        boxes = sam({"confirm button": [{"box": CONFIRM_BOX}]})
         cap = Capture(1, [], [], {}, screenshot=png_bytes())
-        self.assertTrue(SamButtons(boxes, read=lambda c: "Agregar y pagar")(
+        self.assertTrue(SamButtons(boxes, read=lambda c: "Agregar y confirmar")(
             {"kind": "click", "x": 838, "y": 722}, cap)[0])
 
     def test_sam_failure_counts_as_sensitive(self):
@@ -180,9 +180,9 @@ def said(text):
 
 class ParseActionTests(unittest.TestCase):
     def test_click_in_pixels(self):
-        [a] = parse_action(NS(output=[said("Paying."), fn_call("click", {"x": 838, "y": 722})]))
+        [a] = parse_action(NS(output=[said("Confirming."), fn_call("click", {"x": 838, "y": 722})]))
         self.assertEqual((a["kind"], a["x"], a["y"], a["rationale"], a["call_id"]),
-                         ("click", 838, 722, "Paying.", "c1"))
+                         ("click", 838, 722, "Confirming.", "c1"))
 
     def test_out_of_screen_is_invalid(self):
         # Wonder answers in 0-1000 if the tool does not say pixels (g1 probe)
@@ -190,15 +190,16 @@ class ParseActionTests(unittest.TestCase):
         self.assertEqual(a["kind"], "invalid")
 
     def test_other_tools(self):
-        out = parse_action(NS(output=[fn_call("type_text", {"text": "310"}, "a"),
+        out = parse_action(NS(output=[fn_call("type_text", {"text": "Calle 45"}, "a"),
                                       fn_call("keypress", {"keys": ["Control+A"]}, "b"),
                                       fn_call("scroll", {"x": 5, "y": 5, "dy": 300}, "c"),
-                                      fn_call("done", {"summary": "paid"}, "d")]))
+                                      fn_call("done", {"summary": "confirmed"}, "d")]))
         self.assertEqual([a["kind"] for a in out], ["type", "keypress", "scroll", "done"])
 
     def test_no_tool_call_is_done(self):
-        [a] = parse_action(NS(output=[said("I will not pay to that account.")]))
-        self.assertEqual((a["kind"], a["rationale"]), ("done", "I will not pay to that account."))
+        [a] = parse_action(NS(output=[said("I will not send the order to that address.")]))
+        self.assertEqual((a["kind"], a["rationale"]),
+                         ("done", "I will not send the order to that address."))
 
     def test_bad_arguments_are_invalid(self):
         bad = NS(type="function_call", name="click", arguments="{not json", call_id="z")

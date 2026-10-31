@@ -2,7 +2,7 @@
 
   .venv/bin/python -m gate.g6_voice_numeric [--n 20] [--voices Paulina Juan]
 
-Synthesizes --n phrases "<amount in words> pesos a Distribuidora X" with macOS
+Synthesizes --n phrases "<amount in words> pesos, entrega en Tienda Doña Marta" with macOS
 `say` (the requested voices that exist here, alternating) as 16 kHz WAV,
 transcribes each with Voice Transcribe and parses the amount with
 approval.voice_match (the F7 code). "Exact" means the parsed amount equals the
@@ -24,7 +24,7 @@ from approval import voice_match
 from common import meta_client
 from gate.report import report, run_dir
 
-RECIPIENT = "Distribuidora X"
+DESTINATION = "Tienda Doña Marta"
 EXACT_MIN = 0.95
 MEDIAN_MAX_MS = 1500
 
@@ -110,7 +110,7 @@ def main(argv=None):
     rows = []
     for i, amount in enumerate(amounts(args.n)):
         voice = voices[i % len(voices)]
-        said = "%s pesos a %s" % (to_words(amount), RECIPIENT)
+        said = "%s pesos, entrega en %s" % (to_words(amount), DESTINATION)
         wav = out_dir / ("clip_%02d.wav" % i)
         synth(said, voice, wav)
         try:
@@ -119,7 +119,7 @@ def main(argv=None):
             rows.append({"amount": amount, "said": said, "voice": voice, "error": str(e)[:200],
                          "exact": False, "latency_ms": None})
             continue
-        heard, why = voice_match.heard_amount(text, RECIPIENT)
+        heard, why = voice_match.heard_amount(text, DESTINATION)
         rows.append({"amount": amount, "said": said, "voice": voice, "transcript": text,
                      "heard": heard, "why": why, "exact": heard == amount,
                      "latency_ms": ms, "audio_s": secs})

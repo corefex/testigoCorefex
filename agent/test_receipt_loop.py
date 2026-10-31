@@ -1,4 +1,4 @@
-"""F9 in the loop: an approved payment leaves a signed receipt that verifies.
+"""F9 in the loop: an approved order leaves a signed receipt that verifies.
 
 Offline: fixture runs with a throwaway key, files in a temp folder.
 """
@@ -32,8 +32,8 @@ class LoopReceiptTests(unittest.TestCase):
     def test_clean_run_writes_a_receipt_that_verifies(self):
         out = run_fixture("clean", run_dir=self.dir, signing_key=self.seed)
         self.assertEqual(out.receipt_path, self.dir / "receipt.json")
-        for f in ("approved_amount.png", "approved_recipient.png",
-                  "executed_amount.png", "executed_recipient.png"):
+        for f in ("approved_amount.png", "approved_address.png",
+                  "executed_amount.png", "executed_address.png"):
             self.assertTrue((self.dir / f).is_file(), f)
         r = json.loads(out.receipt_path.read_text())
         self.assertEqual(r["status"], "confirmed")
@@ -63,14 +63,14 @@ class LoopReceiptTests(unittest.TestCase):
 
     def test_tampered_crop_is_detected(self):
         out = run_fixture("clean", run_dir=self.dir, signing_key=self.seed)
-        (self.dir / "approved_recipient.png").write_bytes(b"swapped")
+        (self.dir / "approved_address.png").write_bytes(b"swapped")
         res = verify_receipt(str(out.receipt_path), evidence_dir=str(self.dir), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 3)
 
     def test_tampered_receipt_fails_signature(self):
         out = run_fixture("clean", run_dir=self.dir, signing_key=self.seed)
         r = json.loads(out.receipt_path.read_text())
-        r["recipient"] = "300-XXX-0000"
+        r["address"] = "Bodega Norte · Carrera 80 # 7-15, Bogotá"
         out.receipt_path.write_text(json.dumps(r))
         res = verify_receipt(str(out.receipt_path), evidence_dir=str(self.dir), policy_path=POLICY)
         self.assertEqual(res.first_failure.n, 2)

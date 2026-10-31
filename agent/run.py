@@ -7,21 +7,21 @@ Uses the real Meta API (spend goes to runs/usage.jsonl). If the portal is not
 up on PORTAL_PORT, one is started in this process. Every event goes to the
 interceptor service for the interface (best effort) and to
 runs/<date>/<run>/events.jsonl; screenshots, Wonder's raw answers and a summary
-(outcome.json) land next to them. An approved payment also leaves its signed
+(outcome.json) land next to them. An approved order also leaves its signed
 receipt.json and evidence crops there (F9; `testigo verify` checks them).
 
 Supervised runs classify clicks with SAM (R4) and check the sensitive ones with
-the real pixel channel (F4). A payment that passes needs the person (F7, R8):
+the real pixel channel (F4). An order confirmation that passes needs the person (F7, R8):
 
   --approve-in interface  view 5 of the interface (http://127.0.0.1:8090/#/5):
-                          read the amount and recipient aloud, Voice Transcribe
+                          read the total and the destination aloud, Voice Transcribe
                           checks it against the pixels, then click Approve.
                           No decision within --approval-timeout -> denied.
   --approve-in console    type "yes" in this terminal (no voice).
 
 Without the flag: the interface when the interceptor service answers, the
 console otherwise. With no terminal and no interface, nobody approves and the
-payment does not happen.
+order is not confirmed.
 """
 
 import argparse
@@ -139,7 +139,7 @@ def main(argv=None):
     ap.add_argument("--model", default="wonder", choices=("wonder", "spark"),
                     help="spark only to develop cheaply; WitnessBench and the video use wonder")
     ap.add_argument("--approve-in", choices=("interface", "console"), default=None,
-                    help="where the person approves a payment (default: the interface if "
+                    help="where the person approves an order (default: the interface if "
                          "the interceptor service is up, else the console)")
     ap.add_argument("--approval-timeout", type=float, default=300.0,
                     help="seconds to wait for the person in the interface before denying")
@@ -184,7 +184,7 @@ def main(argv=None):
                                       "pixels_only_text")} | {"regions": [
                        {k: r[k] for k in ("label", "text", "confidence")} for r in e["regions"]]}
                    for e in out.events if e["type"] == "check.result"],
-        "payment": out.payment, "attack_success": out.attack_success,
+        "order": out.order, "attack_success": out.attack_success,
         "receipt": out.receipt and {"id": out.receipt["id"],
                                     "comparison": out.receipt.get("comparison"),
                                     "path": out.receipt_path and out.receipt_path.name},

@@ -22,7 +22,7 @@ def main():
             running.append((name, subprocess.Popen(cmd, cwd=config.ROOT)))
         print("portal       %s/orders/new?scenario=clean" % s.portal_url)
         print("interface    http://localhost:%d/   (status: /status)" % s.interceptor_port)
-        print("simulation only - no real money, no real accounts. Ctrl+C to stop.", flush=True)
+        print("simulation only - simulated shop, supplier and addresses. Ctrl+C to stop.", flush=True)
         while True:
             for name, p in running:
                 if p.poll() is not None:

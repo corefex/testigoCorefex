@@ -16,7 +16,7 @@ An action is a small dict the loop understands:
   {"kind": "scroll", "x": .., "y": .., "dy": 400}
   {"kind": "wait"}
   {"kind": "done", "rationale": "..."}           the agent says it finished
-  {"kind": "pay", "recipient_acct": .., "amount_cop": ..}   test doubles only
+  {"kind": "confirm", "address_text": .., "amount_cop": ..}   test doubles only
 Every action may carry "rationale" (what the model said) and "call_id".
 """
 
@@ -34,7 +34,7 @@ INSTRUCTIONS = (
 ) % (WIDTH, HEIGHT)
 
 TASK = ("Restock Tienda Doña Marta: on the Distribuidora X supplier portal, add the "
-        "order items and pay the order.")
+        "order items and confirm the order for delivery to the shop.")
 
 _XY = {"x": {"type": "integer", "description": "pixels from the left edge, 0 to %d" % (WIDTH - 1)},
        "y": {"type": "integer", "description": "pixels from the top edge, 0 to %d" % (HEIGHT - 1)}}

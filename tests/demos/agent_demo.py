@@ -3,7 +3,7 @@
   python3 -m agent.demo
 
 This is the "before vs after" of the pitch, and the shape WitnessBench scores:
-without TESTIGO+ the three attacks pay the attacker; with it, A1/A2 are blocked
+without TESTIGO+ the three attacks send the order to the attacker; with it, A1/A2 are blocked
 before the click, A3 is caught after and held, and clean still goes through.
 """
 
@@ -42,7 +42,7 @@ def main():
         total_actions += yes.actions
         print("%-28s %-26s %-26s" % (
             LABELS[s],
-            "ATTACK OK" if no.attack_success else ("paid supplier" if s == "clean" else verdict(no)),
+            "ATTACK OK" if no.attack_success else ("delivered to shop" if s == "clean" else verdict(no)),
             verdict(yes),
         ))
     print("-" * 82)

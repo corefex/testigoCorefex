@@ -298,11 +298,11 @@ def _desk(fn, *args):
 
 
 def crop_images(images):
-    """{"amount"|"recipient": path under runs/} — PNG files that exist."""
+    """{"amount"|"address": path under runs/} — PNG files that exist."""
     if images is None:
         return {}
-    if not isinstance(images, dict) or set(images) - {"amount", "recipient"}:
-        raise HTTPException(422, "images: only amount and recipient")
+    if not isinstance(images, dict) or set(images) - {"amount", "address"}:
+        raise HTTPException(422, "images: only amount and address")
     out = {}
     for label, rel in images.items():
         if not isinstance(rel, str) or not rel.lower().endswith(".png"):
@@ -408,8 +408,8 @@ def api_policy():
         "owner": policy.owner,
         "source": policy.source,
         "transcript": policy.transcript,
-        "pay_only": policy.pay_only,
-        "max_per_payment_cop": policy.max_per_payment_cop,
+        "deliver_only": policy.deliver_only,
+        "max_per_order_cop": policy.max_per_order_cop,
         "ask_before": policy.ask_before,
         "signed_by": policy.signed_by,
         "sha256": policy.sha256(),
@@ -476,7 +476,7 @@ def status_page():
 h1{{color:#104281;font-size:22px}} td{{padding:4px 16px 4px 0}} .muted{{color:#52514E;font-size:14px}}</style>
 </head><body>
 <h1>TESTIGO+ interceptor &middot; running</h1>
-<p class="muted">Simulation only: no real money, no real accounts. {time}</p>
+<p class="muted">Simulation only: simulated shop, supplier and addresses. {time}</p>
 <p>Portal: <a href="{portal}/orders/new?scenario=clean">{portal}</a></p>
 <p>Policy: {sha} &middot; hash {hok}</p>
 <p>Signing key: {key}</p>

@@ -6,7 +6,7 @@
   4. executed    what executed equals what was approved (and its crop files
                  hash to the recorded executed hashes)
 
-Check 4 is where a changed recipient shows up: an honest, correctly-signed
+Check 4 is where a changed address shows up: an honest, correctly-signed
 receipt of a *caught* attack passes 1-3 and fails 4 ("Evidence mismatch at
 step 4", View 7b). A tampered receipt fails 2.
 
@@ -17,7 +17,7 @@ receipt has no executed side, so step 4 does not apply (F9-D4); a confirmed one
 with nothing captured after the click fails step 4 as not recorded.
 
 Every recorded hash must be a 64-char lowercase hex sha256, and the crop names
-must be exactly amount and recipient (approved always; executed when it is not
+must be exactly amount and address (approved always; executed when it is not
 null); a missing hash never "matches" a missing file. Checks 3 and 4's file
 half run only when an evidence folder is given: then every crop file must
 exist and hash to its recorded value. Without it they check the recorded
@@ -190,7 +190,7 @@ def _check_executed(receipt, approved, evidence_dir):
         a, e = read["approved"], read["executed"]
         diff = [n for n in CROP_NAMES if norm_read(n, a.get(n)) != norm_read(n, e.get(n))]
         if not diff:
-            return Check(4, "executed", True, "executed read values match approved · amount, recipient")
+            return Check(4, "executed", True, "executed read values match approved · amount, address")
         return Check(4, "executed", False, "executed %s read differs from approved: %s"
                      % (", ".join(diff), "; ".join("%r vs %r" % (a.get(n), e.get(n)) for n in diff)))
     if cmp["status"] == "match":

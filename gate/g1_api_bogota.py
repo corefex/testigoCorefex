@@ -6,7 +6,7 @@ Checks, each against the real API through common.meta_client:
   models  the four configured model ids are listed by the API
   spark   Spark 1.3 reads the total from a screenshot of the portal
   wonder  Wonder 1.0 answers the same question
-  sam     SAM 3.1 returns a box for "pay button" on that screenshot
+  sam     SAM 3.1 returns a box for "confirm button" on that screenshot
   voice   Voice Transcribe hears the amount in a Spanish WAV clip
 It also records, without failing, whether each model accepts the `computer`
 tool (computer use), which decides how F3 drives the browser.
@@ -29,7 +29,7 @@ from common import meta_client
 from gate.report import report, run_dir
 
 TOTAL = "120,000"
-SPOKEN = "ciento veinte mil pesos a Distribuidora X"
+SPOKEN = "ciento veinte mil pesos, entrega en Tienda Doña Marta"
 
 
 def portal_screenshot(path):
@@ -75,7 +75,7 @@ def computer_tool(meta, tool, png):
     """'supported' or the API's refusal; never fails the gate."""
     try:
         resp, _ = meta.respond(tool, [{"role": "user", "content": [
-            {"type": "input_text", "text": "Pay this order. Propose the next action."},
+            {"type": "input_text", "text": "Confirm this order. Propose the next action."},
             {"type": "input_image", "image_url": meta_client.png_data_url(png)}]}],
             tools=[{"type": "computer"}])
         calls = [o for o in resp.output if getattr(o, "type", "") == "computer_call"]
@@ -119,7 +119,7 @@ def main(argv=None):
         return TOTAL in text, "%r in %d ms" % (text, ms)
 
     def sam():
-        boxes, ms = meta.segment(png, "pay button")
+        boxes, ms = meta.segment(png, "confirm button")
         raw["sam"] = boxes
         return bool(boxes), "%d box(es) %s in %d ms" % (len(boxes), [b["box"] for b in boxes], ms)
 

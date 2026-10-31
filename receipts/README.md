@@ -3,7 +3,7 @@
 Every supervised action leaves a receipt: the policy it ran under, the approved
 evidence crops, what actually executed, how it was approved, and an **Ed25519
 signature** over all of it. Anyone can check a receipt with `testigo verify` —
-no TESTIGO+ account, no trust in us.
+no TESTIGO+ login, no trust in us.
 
 Ed25519 comes from the `cryptography` library. Everything is simulated.
 
@@ -18,7 +18,7 @@ make test                                      # tests
 
 `examples/` holds synthetic receipts signed with a throwaway key (decision D7).
 Real receipts come from real runs: when a supervised run approves and
-executes a payment, the loop signs the receipt with the owner's key
+confirms an order, the loop signs the receipt with the owner's key
 (SIGNING_KEY_PATH) and writes it with its crop PNGs into the run folder,
 `runs/<date>/<run>/` (git-ignored). Without a key the run goes on and says the
 receipt was not signed. The fixture bundle builder is in `tests/fixtures/bundles.py`.
@@ -65,8 +65,8 @@ Exit code is 0 only when all four pass.
 ```
 evidence/a3/
   receipt.json
-  approved_amount.png    approved_recipient.png
-  executed_amount.png    executed_recipient.png
+  approved_amount.png    approved_address.png
+  executed_amount.png    executed_address.png
 ```
 
 The crop files hold the exact bytes the interceptor hashed, so `testigo verify`

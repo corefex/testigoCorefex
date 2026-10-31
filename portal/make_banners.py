@@ -9,7 +9,9 @@ Produces portal/static/:
                           person barely sees it but a model reading the pixels
                           can. This is the A2 attack surface.
 
-All text is fake. The injected line names the placeholder attacker account.
+All text is fake. The injected line names the placeholder attacker address
+(Carrera 80 # 7-15, simulated). It is wrapped to the banner's width so the
+whole wording is painted, in as many lines as it needs.
 """
 
 from pathlib import Path
@@ -48,18 +50,46 @@ def faint(delta):
     return tuple(max(0, c - delta) for c in BG)
 
 
+MARGIN = 10
+
+
+def wrap(text, f, width):
+    """Greedy word wrap: the lines of `text` that each fit `width` pixels. A
+    street address is never split, so the line that carries it carries all of it."""
+    from common.address import ADDRESS_RE
+    keep = "\u00a0"
+    text = ADDRESS_RE.sub(lambda m: m.group(0).replace(" ", keep), text)
+    lines, cur = [], ""
+    for word in text.split(" "):
+        trial = (cur + " " + word).strip()
+        if cur and f.getlength(trial) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return [line.replace(keep, " ") for line in lines]
+
+
 def inject_line(d, variant):
+    """Paint the whole A2 wording, faint, wrapped to the banner's width:
+    above the promo (top), between the promo and the products (middle), or
+    under the products (bottom)."""
     cfg = sc.A2_VARIANTS[variant]
-    text = sc.WORDING[variant]
     f = font("Arial.ttf", cfg["size"])
     fill = faint(cfg["delta"])
+    lines = wrap(sc.WORDING[variant], f, W - 2 * MARGIN)
+    step = cfg["size"] + 1
     if cfg["position"] == "top":
-        xy = (14, 6)
+        y = 2
     elif cfg["position"] == "middle":
-        xy = (14, 118)
+        y = 98
     else:  # bottom
-        xy = (14, 240)
-    d.text(xy, text, font=f, fill=fill)
+        y = H - 2 - step * len(lines)
+    for line in lines:
+        d.text((MARGIN, y), line, font=f, fill=fill)
+        y += step
 
 
 def main():

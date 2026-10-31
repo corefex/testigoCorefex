@@ -16,9 +16,8 @@ from urllib.parse import urlsplit
 
 from common import clock, config
 from interceptor.channels import Capture
-
-SUPPLIER_ACCT = "310-XXX-4417"
-ATTACKER_ACCT = "300-XXX-0000"
+# The simulated delivery addresses (the shop's, the attacker's storeroom).
+from portal.scenarios import ATTACKER_ADDRESS, SHOP_ADDRESS  # noqa: F401
 
 SETTLE_MS = 400   # after an action, let the page react before the next capture
 
@@ -57,7 +56,7 @@ class BrowserDriver:
         raise NotImplementedError
 
     @property
-    def last_payment(self):                 # pragma: no cover - interface
+    def last_order(self):                   # pragma: no cover - interface
         raise NotImplementedError
 
 
@@ -69,7 +68,7 @@ class PlaywrightDriver(BrowserDriver):
       pixel_channel()  -> the pixel channel given at construction (F4)
       execute(action)  -> perform the click/type/keys/scroll on the page
       observe_after()  -> re-capture after the action
-      last_payment     -> the payment this run made, from the portal's log
+      last_order       -> the order this run confirmed, from the portal's log
                           (read with SCORER_TOKEN, like the scoring script),
                           matched by the portal's opaque run id for the
                           session cookie this browser holds, never log[-1]
@@ -86,7 +85,7 @@ class PlaywrightDriver(BrowserDriver):
         self._pixels = pixel_channel
         self.run_dir = run_dir
         self.frame = 0
-        self._payment = None
+        self._order = None
         self._sid = None        # the portal session cookie this browser holds
         self._runs = []         # run ids of every session this driver opened
 
@@ -133,7 +132,7 @@ class PlaywrightDriver(BrowserDriver):
             raise ValueError("the browser cannot execute %r" % kind)
         self.page.wait_for_timeout(SETTLE_MS)
         self.page.wait_for_load_state("networkidle")
-        self._payment = self._new_payment()
+        self._order = self._new_order()
 
     def observe_after(self):
         return self.observe()
@@ -143,16 +142,16 @@ class PlaywrightDriver(BrowserDriver):
         return urlsplit(self.page.url).path
 
     @property
-    def last_payment(self):
-        if self._payment is None:          # the request may finish after the step (review of F3)
-            self._payment = self._new_payment()
-        return self._payment
+    def last_order(self):
+        if self._order is None:            # the request may finish after the step (review of F3)
+            self._order = self._new_order()
+        return self._order
 
-    def _new_payment(self):
-        # Only this run's payment: the log may hold other runs' (in parallel) and
-        # may have been reset. The portal records one payment per session.
+    def _new_order(self):
+        # Only this run's order: the log may hold other runs' (in parallel) and
+        # may have been reset. The portal records one order per session.
         self._track_run()
-        mine = [p for p in self._payments() if p.get("run") in self._runs]
+        mine = [o for o in self._orders() if o.get("run") in self._runs]
         return dict(mine[-1]) if mine else None
 
     def _track_run(self):
@@ -169,8 +168,8 @@ class PlaywrightDriver(BrowserDriver):
         if run and run not in self._runs:
             self._runs.append(run)
 
-    def _payments(self):
-        return _scorer_get(self.portal_url, "/api/payments")
+    def _orders(self):
+        return _scorer_get(self.portal_url, "/api/orders")
 
 
 SESSION_COOKIE = "dx_session"   # portal/server.py COOKIE

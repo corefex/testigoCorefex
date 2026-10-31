@@ -4,18 +4,20 @@
 
 Concreta la fila F9 del spec general: cada acción supervisada deja un recibo firmado, y cualquiera puede comprobarlo sin confiar en nosotros. Es la salida verificable del sistema: no decide nada, solo registra y prueba lo que ya decidió el motor (F6) y verificó F8. Si algo aquí contradice a `00-spec-general.md` o `01-spec-construccion.md`, mandan esos; lo que no esté en ningún spec va marcado como **[DECIDIR]**. Todo es simulación; la firma y la verificación son reales.
 
+> **1 nov (R2):** el recibo antes registraba un pago a una cuenta; ahora registra un pedido y su dirección de entrega (recortes `amount` y `address`, `03-revision-31-oct.md` §10).
+
 ## Decisiones pendientes
 
 | ID | Tema | Propuesta de este spec | Bloquea |
 | --- | --- | --- | --- |
 | F9-D1 | Qué firma exactamente «la política firmada» (hueco 3 de F0) | La política lleva su propia firma Ed25519 del mismo par de llaves del dueño, y el recibo guarda el `policy_sha256`. El passkey autentica a la persona en el momento de aprobar (F7); la firma Ed25519 da integridad al archivo. Son dos cosas distintas y el recibo nombra ambas. | F1 y la coherencia del recibo |
-| F9-D2 | Los campos del recibo: el código actual usa `amount`/`recipient`, el spec 01 usa `crop_amount`/`crop_recipient` | Usar los del spec 01 (`crop_amount`, `crop_recipient`), y cambiar el código. El contrato manda sobre el código. | el formato |
+| F9-D2 | Los campos del recibo: el código usa `amount`/`address`, el spec 01 usa `crop_amount`/`crop_address` | Usar los del spec 01 (`crop_amount`, `crop_address`), y cambiar el código. El contrato manda sobre el código. | el formato |
 | F9-D3 | Custodia de la llave de firma | Una llave por equipo para la demo, en `.secrets/receipts.key` (F0), nunca en el repositorio. La pública se publica para que cualquiera verifique. | la firma |
-| F9-D4 | Qué guarda `executed` cuando el pago se bloqueó en la revisión y nunca se confirmó (hueco 2 de F0) | Entonces no hay «ejecutado»: el recibo es de un intento **bloqueado**, con `executed: null` y un `blocked_at` que dice dónde (revisión o resultado). Un recibo con `executed` solo existe si el pago se confirmó. | F8 y las vistas 6 y 7 |
+| F9-D4 | Qué guarda `executed` cuando el pedido se bloqueó en la revisión y nunca se confirmó (hueco 2 de F0) | Entonces no hay «ejecutado»: el recibo es de un intento **bloqueado**, con `executed: null` y un `blocked_at` que dice dónde (revisión o resultado). Un recibo con `executed` solo existe si el pedido se confirmó. | F8 y las vistas 6 y 7 |
 
 ## 1. Objetivo
 
-Que al final de cada acción supervisada quede un archivo que: nombre la política bajo la que corrió, guarde los hashes de los recortes aprobados y, si hubo confirmación, los de los ejecutados, diga cómo se aprobó, y lleve una firma Ed25519 sobre todo lo demás. Y una herramienta, `testigo verify`, que cualquiera corre contra ese archivo y su evidencia, sin cuenta ni acceso a nosotros, y que da válido para un recibo bueno y señala exactamente dónde falla uno alterado o uno que registra una divergencia.
+Que al final de cada acción supervisada quede un archivo que: nombre la política bajo la que corrió, guarde los hashes de los recortes aprobados y, si hubo confirmación, los de los ejecutados, diga cómo se aprobó, y lleve una firma Ed25519 sobre todo lo demás. Y una herramienta, `testigo verify`, que cualquiera corre contra ese archivo y su evidencia, sin registrarse ni pedirnos acceso, y que da válido para un recibo bueno y señala exactamente dónde falla uno alterado o uno que registra una divergencia.
 
 El aporte propio (spec general): el recibo incluye el **hash de los recortes de evidencia visual**. Lo demás (recibos firmados para agentes) ya existe y se cita como tal.
 
@@ -43,20 +45,20 @@ Formato del spec 01, con `amount_cop` explícito y el campo de estado que resuel
 ```json
 {"id": "rcpt_2041_7f3a", "time": "2026-10-28T09:16:05-05:00",
  "agent": "wonder@marta-shop",
- "action": "pay COP 120,000 -> Distribuidora X · 310-XXX-4417",
+ "action": "order DX-2041 COP 120,000 -> deliver to Tienda Doña Marta · Calle 45 # 12-30",
  "amount_cop": 120000,
- "recipient": "Distribuidora X · 310-XXX-4417",
+ "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
  "policy_sha256": "....",
- "approved": {"crop_amount": "....", "crop_recipient": "...."},
- "executed": {"crop_amount": "....", "crop_recipient": "...."},
+ "approved": {"crop_amount": "....", "crop_address": "...."},
+ "executed": {"crop_amount": "....", "crop_address": "...."},
  "status": "confirmed",
- "approval": {"method": "passkey", "voice_transcript": "ciento veinte mil pesos a Distribuidora X"},
- "signed_by": "passkey:marta",
+ "approval": {"method": "voice", "voice_transcript": "ciento veinte mil pesos, entrega en Tienda Doña Marta"},
+ "signed_by": "voice:marta",
  "pubkey": "....",
  "signature": "ed25519:...."}
 ```
 
-- `status` es `confirmed` (el pago se ejecutó) o `blocked` (nunca se confirmó). Si es `blocked`, `executed` es `null` y se agrega `"blocked_at": "review"` o `"result"` (F9-D4).
+- `status` es `confirmed` (el pedido se confirmó) o `blocked` (nunca se confirmó). Si es `blocked`, `executed` es `null` y se agrega `"blocked_at": "review"` o `"result"` (F9-D4).
 - `pubkey` es la llave pública del firmante, en hexadecimal. Está por comodidad; la confianza viene de fijarla aparte (sección 5).
 - La hora sale del reloj de Bogotá real (`common/clock.py`), no de una hora local con el huso pegado (hueco de F0 que F9 ya cumple al usar `common`).
 - Los hashes son los mismos `sha256` que calculó el canal de píxeles sobre los PNG de los recortes: el número del recibo es el número que se comprobó.
@@ -102,7 +104,7 @@ Sin la carpeta de evidencia, los pasos 1, 2 y la parte registrada del 4 corren i
 4. Un recibo `blocked` no afirma un ejecutado: `executed` es `null`, `blocked_at` dice dónde, y `verify` no inventa un paso 4.
 5. Cambiar un archivo de recorte de la evidencia hace fallar el paso 3.
 6. Fijar la llave pública correcta verifica; fijar otra, no.
-7. Los campos son los del spec 01 (`crop_amount`, `crop_recipient`), y el `policy_sha256` es el mismo que reporta `interceptor/policy.py`.
+7. Los campos son los del spec 01 (`crop_amount`, `crop_address`), y el `policy_sha256` es el mismo que reporta `interceptor/policy.py`.
 8. Las pruebas de recibos pasan (las 11 actuales, adaptadas a los campos y al estado `blocked`).
 
 ## 8. Qué se prueba con modelos reales y qué con datos de prueba
@@ -120,7 +122,7 @@ F9 en sí no llama a ningún modelo. El recibo del video sale de una corrida rea
 | Archivo | Se conserva | Cambia | Sale |
 | --- | --- | --- | --- |
 | `receipts/keys.py` | Entero: keygen, firmar, verificar con `cryptography`; llave en `.secrets/` | — | — |
-| `receipts/receipt.py` | La serialización canónica, la firma y la verificación de firma | Campos del spec 01 (`crop_amount`, `crop_recipient`); agregar `status`, `amount_cop`, `blocked_at`; la hora desde `common/clock.py` | — |
+| `receipts/receipt.py` | La serialización canónica, la firma y la verificación de firma | Campos del spec 01 (`crop_amount`, `crop_address`); agregar `status`, `amount_cop`, `blocked_at`; la hora desde `common/clock.py` | — |
 | `receipts/verify.py` | Las cuatro comprobaciones y el objeto de resultado | El paso 4 respeta `status: blocked` (no inventa un ejecutado) | — |
 | `receipts/cli.py` | `verify` y `keygen`, la salida de cuatro pasos, el comando `testigo` | — | — |
 | `receipts/test_receipts.py` | Las 11 pruebas | Adaptarlas a los campos nuevos y agregar el caso `blocked` | — |
@@ -132,12 +134,12 @@ El armado del recibo desde una corrida real (no desde datos de prueba) lo conect
 
 1. **F8.** F9 necesita de F8 el estado (`confirmed` o `blocked`), dónde se bloqueó, y los dos grupos de hashes. Si F8 bloquea en la revisión, entrega un recibo `blocked`; solo si se confirma hay `executed`.
 2. **F1.** La firma de la política (F9-D1) la produce F1 con el mismo par de llaves; F9 solo guarda su `sha256` y confía en que F1 la firmó. Conviene que F1 use `receipts/keys.py` para no tener dos caminos de firma.
-3. **F10.** WitnessBench no firma recibos por corrida (serían 20 llaves de evidencia); firma solo las corridas que llegan a un pago. El recibo del video es una de esas, hecha en vivo.
+3. **F10.** WitnessBench no firma recibos por corrida (serían 20 llaves de evidencia); firma solo las corridas que llegan a confirmar un pedido. El recibo del video es una de esas, hecha en vivo.
 
 ## Implementación (31 de octubre)
 
-- **Recibo real en el loop.** `receipts/bundle.py` arma y firma el recibo de un pago aprobado y ejecutado; `agent/loop.py` lo llama (el `build_receipt` de relleno salió). El id se genera (`rcpt_<fecha>_<hora>_<4 hex>`), la hora sale de `common/clock.py`, el método y la transcripción salen de lo que devolvió el aprobador, `signed_by` es `<método>:<dueño>`, el `policy_sha256` es el de la política cargada y los hashes se calculan sobre los bytes reales de los recortes. Se escribe `receipt.json` con `approved_*.png` (y `executed_*.png` si hubo captura después del clic) en `runs/<fecha>/<corrida>/` (no en `runs/evidence/`), y `receipt.signed` lleva el `path` relativo a `runs/`. `run()` tiene `run_dir` (None: no escribe) y `signing_key` (semilla o ruta; None: `SIGNING_KEY_PATH`).
+- **Recibo real en el loop.** `receipts/bundle.py` arma y firma el recibo de un pedido aprobado y confirmado; `agent/loop.py` lo llama (el `build_receipt` de relleno salió). El id se genera (`rcpt_<fecha>_<hora>_<4 hex>`), la hora sale de `common/clock.py`, el método y la transcripción salen de lo que devolvió el aprobador, `signed_by` es `<método>:<dueño>`, el `policy_sha256` es el de la política cargada y los hashes se calculan sobre los bytes reales de los recortes. Se escribe `receipt.json` con `approved_*.png` (y `executed_*.png` si hubo captura después del clic) en `runs/<fecha>/<corrida>/` (no en `runs/evidence/`), y `receipt.signed` lleva el `path` relativo a `runs/`. `run()` tiene `run_dir` (None: no escribe) y `signing_key` (semilla o ruta; None: `SIGNING_KEY_PATH`).
 - **Sin llave no se cae.** Si no hay llave (o no se puede leer), la corrida sigue y emite `agent.step` «receipt not signed: …»; la llave no se crea sola (`testigo keygen`). Un driver de prueba nunca firma con la llave del dueño; `run_fixture` firma con una desechable.
-- **Comparación por valores leídos.** Con recortes reales, la misma región en dos capturas no da el mismo hash (las cajas de SAM se mueven unos píxeles y la revisión tiene otro diseño). El recibo guarda, además de los hashes (integridad de los archivos), el texto leído (`read.approved`, `read.executed`) y la comparación firmada (`comparison`: `match`/`mismatch`/`pending`, `by`: `read`/`hash`). Lo aprobado se lee del evento `approval.requested` (monto y destinatario leídos de los píxeles); lo ejecutado lo entregará F8 (`sign_payment(..., executed_read=…)`). El paso 4 de `verify` recalcula la comparación desde los valores firmados (monto: solo dígitos; destinatario: letras y dígitos en minúscula), comprueba que los `executed_*.png` tengan su hash, y si el recibo no trae `read` compara por hash: así `examples/` sigue dando los mismos mensajes.
-- **`status`.** `confirmed` o `blocked` (con `executed: null` y `blocked_at`; el paso 4 «no aplica»). Un `confirmed` sin nada capturado después del clic (hoy, en corridas reales, hasta F8) se firma con `executed: null` y `comparison: pending`, y `verify` falla el paso 4 con «Executed evidence not recorded at step 4»: no inventa un ejecutado.
-- **Abierto.** F9-D2 sigue sin aplicar: los campos se quedan como `amount`/`recipient` porque la vista 7 y `examples/` los leen así. La normalización de lo leído debe coincidir con la de F8.
+- **Comparación por valores leídos.** Con recortes reales, la misma región en dos capturas no da el mismo hash (las cajas de SAM se mueven unos píxeles y la revisión tiene otro diseño). El recibo guarda, además de los hashes (integridad de los archivos), el texto leído (`read.approved`, `read.executed`) y la comparación firmada (`comparison`: `match`/`mismatch`/`pending`, `by`: `read`/`hash`). Lo aprobado se lee del evento `approval.requested` (monto y dirección de entrega leídos de los píxeles); lo ejecutado lo entrega F8 (`sign_order(..., executed_read=…)`). El paso 4 de `verify` recalcula la comparación desde los valores firmados (monto: solo dígitos; dirección: `norm_read("address", …)`, las direcciones en forma canónica), comprueba que los `executed_*.png` tengan su hash, y si el recibo no trae `read` compara por hash: así `examples/` sigue dando los mismos mensajes.
+- **`status`.** `confirmed` o `blocked` (con `executed: null` y `blocked_at`; el paso 4 «no aplica»). Un `confirmed` sin nada capturado después del clic se firma con `executed: null` y `comparison: pending`, y `verify` falla el paso 4 con «Executed evidence not recorded at step 4»: no inventa un ejecutado.
+- **Abierto.** F9-D2 sigue sin aplicar: los campos se quedan como `amount`/`address` porque la vista 7 y `examples/` los leen así. La normalización de lo leído es la misma de F8 (`norm_read`).

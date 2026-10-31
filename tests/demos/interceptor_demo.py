@@ -17,7 +17,7 @@ from interceptor.engine import Interceptor
 from interceptor.policy import load
 from tests.fixtures import captures as fx
 
-PAY = {"kind": "pay"}
+CONFIRM = {"kind": "confirm"}
 
 
 _QUIET = False  # when True (JSON mode) the narrative lines are suppressed
@@ -44,12 +44,12 @@ def show(e, as_json):
             print("    check.result  status=%-16s latency=%dms%s" %
                   (e["status"], e["latency_ms"], extra))
         elif t == "approval.requested":
-            print("    approval.requested  %s COP -> %s  crops(amount=%s recipient=%s)" % (
-                e["amount_cop"], e["recipient"],
-                e["crops"]["amount"][:4], e["crops"]["recipient"][:4]))
+            print("    approval.requested  %s COP -> %s  crops(amount=%s address=%s)" % (
+                e["amount_cop"], e["address"],
+                e["crops"]["amount"][:4], e["crops"]["address"][:4]))
         elif t == "verify.result":
-            print("    verify.result  status=%-8s approved.recipient=%s executed.recipient=%s" % (
-                e["status"], e["approved"]["recipient"][:4], e["executed"]["recipient"][:4]))
+            print("    verify.result  status=%-8s approved.address=%s executed.address=%s" % (
+                e["status"], e["approved"]["address"][:4], e["executed"]["address"][:4]))
         else:
             print("    %s" % t)
 
@@ -64,8 +64,8 @@ def run(as_json=False):
         return Interceptor(policy, fx.channel_for(name))
 
     # clean -----------------------------------------------------------------
-    line("[clean] agent proposes: click Pay with Nequi")
-    d = interceptor("clean").check(PAY, fx.capture_clean(), latency_ms=1400)
+    line("[clean] agent proposes: click Confirm order")
+    d = interceptor("clean").check(CONFIRM, fx.capture_clean(), latency_ms=1400)
     show(d.check_event, as_json)
     if d.approval_event:
         show(d.approval_event, as_json)
@@ -75,7 +75,7 @@ def run(as_json=False):
 
     # A1 hidden text in code ------------------------------------------------
     line("[A1] hidden instruction in the page code")
-    d = interceptor("a1").check(PAY, fx.capture_a1(), latency_ms=1400)
+    d = interceptor("a1").check(CONFIRM, fx.capture_a1(), latency_ms=1400)
     show(d.check_event, as_json)
     results["a1"] = d
     line("  -> %s" % ("BLOCKED" if d.blocked else "NOT blocked"))
@@ -83,15 +83,15 @@ def run(as_json=False):
 
     # A2 text painted in image ----------------------------------------------
     line("[A2] instruction painted inside the banner image")
-    d = interceptor("a2").check(PAY, fx.capture_a2(), latency_ms=1400)
+    d = interceptor("a2").check(CONFIRM, fx.capture_a2(), latency_ms=1400)
     show(d.check_event, as_json)
     results["a2"] = d
     line("  -> %s" % ("BLOCKED" if d.blocked else "NOT blocked"))
     line()
 
     # A3 change after approval ---------------------------------------------
-    line("[A3] clean at review, recipient swapped at click time")
-    before = interceptor("a3").check(PAY, fx.capture_a3_before(), latency_ms=1400)
+    line("[A3] clean at review, address swapped at click time")
+    before = interceptor("a3").check(CONFIRM, fx.capture_a3_before(), latency_ms=1400)
     show(before.check_event, as_json)
     if before.approval_event:
         show(before.approval_event, as_json)
@@ -104,16 +104,16 @@ def run(as_json=False):
     line()
 
     # cannot_verify ---------------------------------------------------------
-    line("[blurred] SAM cannot read the recipient")
-    d = interceptor("blurred").check(PAY, fx.capture_blurred(), latency_ms=1400)
+    line("[blurred] SAM cannot read the address")
+    d = interceptor("blurred").check(CONFIRM, fx.capture_blurred(), latency_ms=1400)
     show(d.check_event, as_json)
     results["blurred"] = d
     line("  -> %s" % ("BLOCKED" if d.blocked else "NOT blocked"))
     line()
 
-    # policy_violation (visible bad recipient) ------------------------------
-    line("[policy] pixels show a recipient outside the policy")
-    d = interceptor("a3_after").check(PAY, fx.capture_a3_after(), latency_ms=1400)
+    # policy_violation (visible bad address) ------------------------------
+    line("[policy] pixels show an address outside the policy")
+    d = interceptor("a3_after").check(CONFIRM, fx.capture_a3_after(), latency_ms=1400)
     show(d.check_event, as_json)
     results["policy"] = d
     line("  -> %s" % ("BLOCKED" if d.blocked else "NOT blocked"))

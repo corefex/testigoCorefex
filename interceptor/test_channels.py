@@ -26,9 +26,10 @@ def png(w=1280, h=800, color=(255, 255, 255)):
     return buf.getvalue()
 
 
-SCREEN = {"lines": ["Total", "COP 120,000", "Distribuidora X - 310-XXX-4417"],
+SCREEN = {"lines": ["Total", "COP 120,000", "Tienda Doña Marta - Calle 45 # 12-30, Bogotá"],
           "amount": {"text": "COP 120,000", "box": [28, 703, 196, 743]},
-          "recipient": {"text": "310-XXX-4417 Distribuidora X", "box": [27, 320, 405, 356]}}
+          "address": {"text": "Calle 45 # 12-30, Bogotá Tienda Doña Marta",
+                      "box": [27, 320, 405, 356]}}
 
 
 class FakeMeta:
@@ -44,17 +45,17 @@ class FakeMeta:
         elif "pixels wide" in prompt:
             body = self.screen
         else:
-            # a crop: say what is in it (the recipient crop is the wider one)
+            # a crop: say what is in it (the address crop is the wider one)
             w = Image.open(io.BytesIO(base64.b64decode(
                 messages[0]["content"][1]["image_url"]["url"].split(",", 1)[1]))).size[0]
-            body = {"text": self.crop_text if w < 300 else SCREEN["recipient"]["text"]}
+            body = {"text": self.crop_text if w < 300 else SCREEN["address"]["text"]}
         content = body if isinstance(body, str) else json.dumps(body)
         return NS(choices=[NS(message=NS(content=content))]), 1
 
     def segment(self, image, phrase):
         if not self.boxes:
             return [], 1
-        if phrase == "pay button":
+        if phrase == "confirm button":
             return [{"box": [754, 700, 923, 747], "confidence": 0.72}], 1
         # a box prompt: SAM tightens the box it was given (8 px of margin each side)
         f = dict(kv.split("=") for kv in phrase.split("|")[1].split(";")[1:])
@@ -93,10 +94,10 @@ class ChannelTests(unittest.TestCase):
     def test_reads_regions_crops_and_lines(self):
         cap = self.cap()
         regions = {r["label"]: r for r in SamSparkChannel(FakeMeta()).read_regions(cap)}
-        self.assertEqual(set(regions), {"amount", "recipient", "pay button"})
+        self.assertEqual(set(regions), {"amount", "address", "confirm button"})
         self.assertEqual(regions["amount"]["text"], "COP 120,000")
         self.assertAlmostEqual(regions["amount"]["confidence"], 0.88)
-        self.assertEqual(set(cap.crops), {"amount", "recipient"})
+        self.assertEqual(set(cap.crops), {"amount", "address"})
         self.assertIn("COP 120,000", cap.rendered_lines)
         self.assertEqual(cap.rendered_lines.count("a tile line"), 4)
 
@@ -114,7 +115,7 @@ class ChannelTests(unittest.TestCase):
         meta = FakeMeta()
         meta.segment = lambda image, phrase: ([{"box": [900, 90, 1000, 120], "confidence": 0.9}], 1)
         regions = {r["label"]: r for r in SamSparkChannel(meta).read_regions(self.cap())}
-        self.assertNotIn("recipient", regions)
+        self.assertNotIn("address", regions)
         self.assertNotIn("amount", regions)
 
     def test_crop_that_disagrees_with_the_first_read_gives_no_confidence(self):

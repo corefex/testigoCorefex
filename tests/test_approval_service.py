@@ -23,13 +23,13 @@ from approval.desk import MAX_VOICE_ATTEMPTS, ApprovalDesk, DeskError
 from interceptor import events as ev
 from interceptor import service
 
-GOOD = "ciento veinte mil pesos a Distribuidora X"
-WRONG = "ciento cincuenta mil pesos a Distribuidora X"
+GOOD = "ciento veinte mil pesos, entrega en Tienda Doña Marta"
+WRONG = "ciento cincuenta mil pesos, entrega en Tienda Doña Marta"
 SAME = {"Origin": "http://testserver"}          # the interface page itself
 
 
 def approval_event():
-    return ev.approval_requested(5, 120000, "Distribuidora X · 310-XXX-4417",
+    return ev.approval_requested(5, 120000, "Tienda Doña Marta · Calle 45 # 12-30, Bogotá",
                                  "a" * 64, "b" * 64, ts="2026-10-31T10:00:00-05:00")
 
 
@@ -104,17 +104,17 @@ class DeskTests(unittest.TestCase):
         d = ApprovalDesk()
         rec = d.open(approval_event())
         d.start_voice(rec["id"])
-        v = d.record_voice(rec["id"], "no pagues " + GOOD)["voice"]
+        v = d.record_voice(rec["id"], "no confirmes " + GOOD)["voice"]
         self.assertFalse(v["match"])
         self.assertEqual(v["negated"], ["no"])
         d.start_voice(rec["id"])
-        v = d.record_voice(rec["id"], "cinco mil, ciento quince mil a Distribuidora X")["voice"]
+        v = d.record_voice(rec["id"], "cinco mil, ciento quince mil, entrega en Tienda Doña Marta")["voice"]
         self.assertFalse(v["amount_match"])
         self.assertIsNone(v["heard_amount"])
         self.assertTrue(v["amount_reason"])
         big = d.open(dict(approval_event(), amount_cop=2_000_000_000))
         d.start_voice(big["id"])
-        v = d.record_voice(big["id"], "dos mil millones a Distribuidora X")["voice"]
+        v = d.record_voice(big["id"], "dos mil millones, entrega en Tienda Doña Marta")["voice"]
         self.assertIn("out of range", v["amount_reason"])
 
     def test_voice_attempts_are_capped(self):
@@ -356,7 +356,7 @@ class ServiceApproverTests(unittest.TestCase):
         """A service that says match for a transcript that does not match the
         event (a bug, or a tampered record) is not trusted."""
         a = ServiceApprover(http=lambda *a: None, sleep=lambda s: None)
-        for said in (WRONG, "no pagues " + GOOD, "cinco mil, ciento quince mil a Distribuidora X"):
+        for said in (WRONG, "no confirmes " + GOOD, "cinco mil, ciento quince mil, entrega en Tienda Doña Marta"):
             rec = {"id": "a1", "decision": "approve", "event": approval_event(),
                    "voice": {"match": True, "transcript": said}}
             granted, info = a._result(approval_event(), rec, "a1")
@@ -390,17 +390,17 @@ class RunWiringTests(unittest.TestCase):
         class Channel:
             def read_regions(self, capture):
                 capture.crops["amount"] = b"\x89PNG amount"
-                capture.crops["recipient"] = b"\x89PNG recipient"
+                capture.crops["address"] = b"\x89PNG address"
                 return ["regions"]
 
         capture = mock.Mock(frame=5, crops={})
         cf = CropFiles(Channel(), self.tmp / "run1")
         (self.tmp / "run1").mkdir()
         self.assertEqual(cf.read_regions(capture), ["regions"])
-        e = ev.approval_requested(5, 120000, "Distribuidora X", sha_crop(b"\x89PNG amount"),
-                                  sha_crop(b"\x89PNG recipient"))
+        e = ev.approval_requested(5, 120000, "Tienda Doña Marta", sha_crop(b"\x89PNG amount"),
+                                  sha_crop(b"\x89PNG address"))
         images = cf.images_for(e)
-        self.assertEqual(set(images), {"amount", "recipient"})
+        self.assertEqual(set(images), {"amount", "address"})
         self.assertEqual((self.tmp / images["amount"]).read_bytes(), b"\x89PNG amount")
         self.assertEqual(cf.images_for(dict(e, crops={"amount": "0" * 64})), {})
 

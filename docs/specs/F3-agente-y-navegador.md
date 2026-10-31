@@ -4,13 +4,15 @@
 
 Concreta la fila F3 del spec general: Wonder maneja el portal con un navegador controlado, y el interceptor se pone en medio, de modo que ninguna acción llega a la página sin pasar por él. Se puede correr con supervisor o sin él. Si algo aquí contradice a `00-spec-general.md` o `01-spec-construccion.md`, mandan esos. Todo es simulación; el agente y el navegador son reales.
 
+> **1 nov:** R3 (bucle de varias acciones) aprobado e implementado. R2 decidido: el campo protegido es la dirección de entrega (antes era un pago; `03-revision-31-oct.md` §10).
+
 ## Decisiones pendientes
 
 | ID | Tema | Propuesta de este spec | Bloquea |
 | --- | --- | --- | --- |
 | F3-D1 | Formato de las acciones de computer use de Wonder (punto sin confirmar del spec de construcción; prueba 2 del gate) | Aislarlo en una sola función (`agent/agent.py: parse_action`). El gate g2 guarda las respuestas crudas de Wonder; con ellas se llena esa función. El resto del sistema no depende del formato. | el agente real |
 | F3-D2 | Cómo se garantiza que toda acción pase por el interceptor | El bucle es el único camino del agente al navegador: recibe la acción, la pasa por `check` (F6) y solo entonces la ejecuta en Playwright. Se mide: acciones propuestas = acciones interceptadas (gate g2, 10 de 10). | la invariante |
-| F3-D3 | Qué emite el modo sin supervisor para la vista 3 | El bucle sin supervisor no corre el interceptor, así que no hay `check.result`; la vista 3 lee el pago del registro del portal. El bucle emite `agent.step` y `frame.captured` en ambos modos. | F11 |
+| F3-D3 | Qué emite el modo sin supervisor para la vista 3 | El bucle sin supervisor no corre el interceptor, así que no hay `check.result`; la vista 3 lee el pedido del registro del portal. El bucle emite `agent.step` y `frame.captured` en ambos modos. | F11 |
 | F3-D5 | Cómo maneja Wonder el navegador, si la API no le acepta la herramienta `computer` (g1, 31 oct) | **Aprobado por Joen Anaya el 31 de oct:** Wonder 1.0 por la Responses API con herramientas `function` propias (`click`, `double_click`, `type_text`, `keypress`, `scroll`, `wait`, `done`), en píxeles de la captura de 1280×800. Una acción por turno; la conversación se encadena con `previous_response_id`. Spark 1.3 solo para desarrollar barato (`--model spark`), nunca en WitnessBench ni en el video. | el agente real |
 | F3-D4 | Cómo entrega el navegador el texto del código de la página (para F5) | De `page.content()` y del árbol de accesibilidad de Playwright, junto con la captura. Es la entrada «código» de la comparación (F5-D3). | F5 |
 
@@ -33,7 +35,7 @@ Fuera de alcance de F3: el canal de píxeles (F4), las reglas (F6), la aprobaci�
 - Las acciones ejecutadas en el navegador (clic, escribir).
 - Por cada acción: `agent.step` y, al capturar, `frame.captured`.
 - La captura y el texto del código de la página, que alimentan F4 y F5.
-- El resultado de la corrida: a dónde fue el pago (del registro del portal, F2).
+- El resultado de la corrida: a qué dirección se envió el pedido (del registro del portal, F2).
 
 ## 3. La invariante del gate
 
@@ -42,14 +44,14 @@ En modo supervisado, el bucle es el **único** camino del agente al navegador:
 1. Captura la pantalla y toma el texto del código (F3-D4).
 2. Le pide a Wonder la siguiente acción (una captura entra, una acción sale).
 3. Pasa esa acción por el gancho del interceptor **antes** de ejecutarla. Si es sensible (§3b), además por `check` (F6); si F6 bloquea, no se ejecuta.
-4. Si es un pago que cumple, pide aprobación (F7); solo con aprobación se ejecuta.
+4. Si es la confirmación de un pedido que cumple, pide aprobación (F7); solo con aprobación se ejecuta.
 5. Ejecuta la acción en Playwright y recaptura para F8.
 
 Se mide que toda acción propuesta pase por el interceptor: acciones devueltas por Wonder = acciones interceptadas (gate g2, 10 de 10). Esa igualdad es la prueba de que el interceptor no se puede saltar.
 
 **Sin supervisor** (`--no-supervisor`): los pasos 3 y 4 no están; el agente actúa directo. Es el modo de la vista 3 y del «antes» de WitnessBench. No deja recibo.
 
-## 3b. Varias acciones y acción sensible (31 de oct, R3 y R4)
+## 3b. Varias acciones y acción sensible (31 de oct, R3 y R4; R3 aprobado e implementado)
 
 **El bucle no es de una acción.** Wonder necesita varios pasos para hacer el pedido: agregar artículos, ir a revisar, (en A1 y A2, escribir en el campo editable) y confirmar. El bucle repite:
 
@@ -61,12 +63,12 @@ Se mide que toda acción propuesta pase por el interceptor: acciones devueltas p
 
 La invariante no cambia: toda acción propuesta pasa por el gancho del bucle antes de llegar a Playwright, se clasifique como sensible o no. Se mide igual (propuestas = interceptadas).
 
-**De clic a acción sensible.** Wonder no entrega «pay»: entrega clics con coordenadas, teclas y texto. El motor necesita saber cuándo una de esas acciones importa. Regla, decidida solo con píxeles:
+**De clic a acción sensible.** Wonder no entrega «confirm order»: entrega clics con coordenadas, teclas y texto. El motor necesita saber cuándo una de esas acciones importa. Regla, decidida solo con píxeles:
 
 | Acción de Wonder | Es sensible si | Qué corre |
 | --- | --- | --- |
 | Clic en (x, y) | (x, y) cae dentro de la caja que SAM devuelve para «confirm button» o «review button» en esa captura | Canal completo (F4, F5) y reglas (F6); en la revisión, además F8 |
-| Escribir texto | el foco está dentro de la caja que SAM devuelve para el campo protegido (destinatario o dirección de entrega, según R2), o el texto contiene un número de cuenta o una dirección | Reglas de política sobre el texto escrito y sobre los píxeles después de escribir |
+| Escribir texto | el foco está dentro de la caja que SAM devuelve para el campo protegido (la dirección de entrega, «Deliver to»), o el texto contiene una dirección (`ADDRESS_RE`) | Reglas de política sobre el texto escrito y sobre los píxeles después de escribir |
 | Cualquier otra (scroll, clic fuera de esas cajas, esperar) | nunca | Se registra y se ejecuta; sin llamadas a SAM ni Spark |
 
 Para saber si un clic es sensible bastan las cajas de los dos botones protegidos («confirm button» y «review button»): una llamada a SAM por botón, o una sola si g4 muestra que SAM acepta los dos en un mismo prompt. No hacen falta las tres del canal completo. Así la latencia y el costo solo crecen en los pasos que importan. Nunca se usa el DOM ni el `data-testid` para clasificar: un atacante podría renombrar el botón en el código y dejarlo igual en pantalla.
@@ -79,7 +81,7 @@ Para saber si un clic es sensible bastan las cajas de los dos botones protegidos
 
 ## 4. El formato de las acciones de Wonder
 
-- **Confirmado el 31 de oct (F3-D5):** Wonder devuelve `function_call` con argumentos JSON. Si la herramienta no dice la escala, Wonder responde en coordenadas de 0 a 1000; por eso cada herramienta dice «pixels of the screenshot, 1280 wide and 800 tall», y con eso devuelve píxeles (838, 722 para «Pay with Nequi»). Una coordenada fuera de la pantalla es una acción `invalid` que nunca se ejecuta.
+- **Confirmado el 31 de oct (F3-D5):** Wonder devuelve `function_call` con argumentos JSON. Si la herramienta no dice la escala, Wonder responde en coordenadas de 0 a 1000; por eso cada herramienta dice «pixels of the screenshot, 1280 wide and 800 tall», y con eso devuelve píxeles (por ejemplo, el centro del botón «Confirm order»). Una coordenada fuera de la pantalla es una acción `invalid` que nunca se ejecuta.
 - Todo lo que depende de ese formato vive en `agent/agent.py: parse_action` (F3-D1). El bucle y el interceptor no lo conocen.
 - Si Wonder responde sin llamar ninguna herramienta, la acción es `done` con lo que dijo como razón.
 - El gate g2 (`gate/g2_intercept_wonder.py`) guarda las respuestas crudas de Wonder en `runs/gate/<fecha>/g2/` y cuenta que cada acción pase por el gancho antes de ejecutarse.

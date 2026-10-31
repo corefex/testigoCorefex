@@ -4,14 +4,14 @@
 
 Takes, with Playwright on the running portal (1280x800, scale 1):
   - 20 order pages: 4 scenarios x 5 variants, after "Add order items", so the
-    amount, the recipient and the pay button are on screen (60 elements);
-  - 10 review screens, after "Review payment": clean and a3, variants 1-5
+    amount, the delivery address and the review button are on screen (60 elements);
+  - 10 review screens, after "Review order": clean and a3, variants 1-5
     (a3 is the scenario whose review screen differs; 20 elements).
 
 The reference boxes come from the portal's data-testid elements, as painted
 (a button or bordered field whole, text by its extent). That is allowed here because it is MEASUREMENT, after the
-fact: the pixel channel never sees them. The recipient's box covers the
-account field and the name next to it, as the channel is asked to read both.
+fact: the pixel channel never sees them. The address's box covers the
+"Deliver to" field and the name next to it, as the channel is asked to read both.
 
 Writes runs/gate/<date>/g4/captures/<name>.png and truth.json. --limit takes
 only the first N captures (order pages first).
@@ -29,10 +29,10 @@ VARIANTS = (1, 2, 3, 4, 5)
 REVIEW_SCENARIOS = ("clean", "a3")
 
 # label -> the data-testid elements whose union is the reference box
-ORDER_TRUTH = {"amount": ("amount",), "recipient": ("recipient", "recipient-name"),
-               "pay button": ("pay-button",)}
-REVIEW_TRUTH = {"amount": ("amount",), "recipient": ("recipient", "recipient-name"),
-                "pay button": ("confirm-button",)}
+ORDER_TRUTH = {"amount": ("amount",), "address": ("address", "address-name"),
+               "confirm button": ("review-button",)}
+REVIEW_TRUTH = {"amount": ("amount",), "address": ("address", "address-name"),
+                "confirm button": ("confirm-button",)}
 
 
 def plan(limit=None):
@@ -93,7 +93,7 @@ def capture(name, scenario, variant, screen, cap_dir):
         page.wait_for_load_state("networkidle")
         spec = ORDER_TRUTH
         if screen == "review":
-            page.click('[data-testid="pay-button"]')
+            page.click('[data-testid="review-button"]')
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(400)      # let A3's late rewrites land (v5: 150 ms)
             spec = REVIEW_TRUTH

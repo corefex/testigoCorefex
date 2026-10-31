@@ -1,13 +1,13 @@
 """The receipt of a real run: build it, sign it, write it with its evidence.
 
-The loop calls `signing_seed` once and `sign_payment` after an approved
-payment. F8 plugs in by passing what it read after the click: the executed
+The loop calls `signing_seed` once and `sign_order` after an approved
+order. F8 plugs in by passing what it read after the click: the executed
 crop bytes, the text read from them, and its verify.result.
 
 A bundle is the run folder itself (one receipt per run):
   receipt.json
-  approved_amount.png    approved_recipient.png
-  executed_amount.png    executed_recipient.png   (when captured)
+  approved_amount.png    approved_address.png
+  executed_amount.png    executed_address.png   (when captured)
 
 `testigo verify <run>/receipt.json` finds the PNGs next to the receipt.
 """
@@ -44,19 +44,19 @@ def crops_of(capture):
     return got or None
 
 
-def sign_payment(policy, approval_event, approval_info, approved_crops, seed,
+def sign_order(policy, approval_event, approval_info, approved_crops, seed,
                  executed_crops=None, executed_read=None, verify_result=None,
                  run_dir=None, agent="agent", status=None, blocked_at=None):
-    """Build and sign the receipt of an approved payment: executed, or blocked
+    """Build and sign the receipt of an approved order: confirmed, or blocked
     before confirming (`status="blocked"`, `blocked_at="review"`, F8-D2).
 
-    approval_event   the approval.requested event (amount and recipient read
+    approval_event   the approval.requested event (amount and address read
                      from the pixels, crop hashes)
     approval_info    what the approver returned (method, voice_transcript, ...)
-    approved_crops   {'amount': bytes, 'recipient': bytes} from the checked capture
+    approved_crops   {'amount': bytes, 'address': bytes} from the checked capture
     executed_crops   the same after the click (possibly only some of them), or
                      None if not captured (F8)
-    executed_read    {'amount': text, 'recipient': text} read after the click, or None
+    executed_read    {'amount': text, 'address': text} read after the click, or None
     verify_result    the verify.result event (not used for the executed hashes:
                      the receipt records only hashes of crops it writes)
     run_dir          where to write receipt.json and the PNGs; None writes nothing
@@ -70,17 +70,17 @@ def sign_payment(policy, approval_event, approval_info, approved_crops, seed,
                       if n in CROP_NAMES and b} or None
     receipt = build(
         policy,
-        action_text="pay COP {:,} -> {}".format(approval_event["amount_cop"],
-                                               approval_event["recipient"]),
+        action_text="confirm order COP {:,} -> deliver to {}".format(
+            approval_event["amount_cop"], approval_event["address"]),
         amount_cop=approval_event["amount_cop"],
-        recipient_text=approval_event["recipient"],
+        address_text=approval_event["address"],
         approved_crops=approved_crops,
         executed_crops=executed_crops,
         approval={"method": approval_info.get("method", ""),
                   "voice_transcript": approval_info.get("voice_transcript", ""),
                   "voice_match": approval_info.get("voice_match")},
         approved_read={"amount": str(approval_event["amount_cop"]),
-                       "recipient": approval_event["recipient"]},
+                       "address": approval_event["address"]},
         executed_read=executed_read,
         signed_by="%s:%s" % (approval_info.get("method") or "approval", policy.owner),
         agent=agent,

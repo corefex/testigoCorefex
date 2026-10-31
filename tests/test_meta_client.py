@@ -144,13 +144,13 @@ class MetaClientTests(unittest.TestCase):
         self.assertAlmostEqual(self.records()[-1]["cost_usd"], 1.25)   # input_tokens priced
 
     def test_sam_returns_boxes_and_costs_one_image(self):
-        boxes, _ = self.client().segment(b"\x89PNG fake", "pay button")
+        boxes, _ = self.client().segment(b"\x89PNG fake", "confirm button")
         self.assertEqual(boxes, [{"box": [754, 700, 923, 747], "confidence": None},
                                  {"box": [10, 20, 30, 40], "confidence": 0.42}])
         req = json.loads(FakeAPI.last[2])
         self.assertEqual(req["model"], "fake-sam")
         parts = req["input"][0]["content"]
-        self.assertEqual(parts[0], {"type": "input_text", "text": "pay button"})
+        self.assertEqual(parts[0], {"type": "input_text", "text": "confirm button"})
         self.assertTrue(parts[1]["image_url"].startswith("data:image/png;base64,"))
         rec = self.records()[-1]
         self.assertEqual((rec["tool"], rec["cost_usd"]), ("sam", 0.0025))

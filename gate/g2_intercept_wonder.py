@@ -8,7 +8,7 @@ the loop's hook before reaching Playwright. Passes when the two counts are
 equal and reach the minimum (10 of 10).
 
 g2 only counts the hook, so it runs without the pixel models (no spend on
-them): a click on the pay button is blocked with cannot_verify, and each run
+them): a click on the confirm button is blocked with cannot_verify, and each run
 usually contributes one action. Wonder's raw answers
 and each run's outcome go to runs/gate/<date>/g2/.
 """

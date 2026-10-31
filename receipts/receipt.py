@@ -21,16 +21,17 @@ import json
 import os
 import re
 
+from common import address as _address
 from common import clock
 from . import keys
 
-CONFIRMED = "confirmed"   # the payment went through
-BLOCKED = "blocked"       # it never did; executed is null (F9-D4)
-CROP_NAMES = ("amount", "recipient")
-# An account as a reader may return it: dashes, en/em dashes or spaces between
-# groups, masked digits as x or *, and I/l/O misread for 1/1/0 in digit places.
-ACCOUNT_RE = re.compile(r"(?<![\w])([\dIlO]{3})[\s\-\u2013\u2014]?([\dxX*]{3})[\s\-\u2013\u2014]?([\dIlO]{4})(?![\w])")
-_OCR_DIGITS = str.maketrans({"I": "1", "l": "1", "O": "0"})
+CONFIRMED = "confirmed"   # the order was confirmed
+BLOCKED = "blocked"       # it never was; executed is null (F9-D4)
+CROP_NAMES = ("amount", "address")
+# A delivery address as a reader may return it (common.address): street type
+# and abbreviations, "#"/"No."/"N°"/"número", en/em dashes, and I/l/O misread
+# for 1/1/0 in digit places.
+ADDRESS_RE = _address.ADDRESS_RE
 
 
 def sha_crop(data):
@@ -48,7 +49,7 @@ def canonical(receipt):
 
 
 def hash_crops(crop_bytes):
-    """{'amount': b'...', 'recipient': b'...'} -> {'amount': sha, 'recipient': sha}."""
+    """{'amount': b'...', 'address': b'...'} -> {'amount': sha, 'address': sha}."""
     return {name: sha_crop(data) for name, data in crop_bytes.items()}
 
 
@@ -58,21 +59,17 @@ def new_id(now=None):
 
 
 def norm_read(name, text):
-    """A read value as compared: the amount's digits. The recipient: its account
-    numbers (ddd-ddd-dddd, masked digits as x), sorted, de-duplicated, lower
-    case, joined by ","; labels and names around them ("PAY TO (NEQUI ACCOUNT)",
-    "To") differ between screens and do not count. With no account number, its
-    letters and digits in lower case (spacing, case and punctuation do not count)."""
+    """A read value as compared: the amount's digits. The address: the
+    addresses in it in canonical form ("calle 45 # 12-30"), sorted,
+    de-duplicated, joined by ","; labels, names and the city around them
+    ("DELIVER TO", "Tienda Doña Marta", "Bogotá") differ between screens and do
+    not count. With no address, its letters and digits in lower case (spacing,
+    case and punctuation do not count)."""
     if text is None:
         return None
     if name == "amount":
         return _amount_digits(str(text))
-    accounts = sorted({"%s-%s-%s" % (a.translate(_OCR_DIGITS), b.lower().replace("*", "x"),
-                                     c.translate(_OCR_DIGITS))
-                       for a, b, c in ACCOUNT_RE.findall(str(text))})
-    if accounts:
-        return ",".join(accounts)
-    return re.sub(r"[\W_]+", "", str(text).lower())
+    return _address.norm_address(text)
 
 
 def _amount_digits(text):
@@ -120,17 +117,17 @@ def sign(receipt, seed):
     return receipt
 
 
-def build(policy, action_text, amount_cop, recipient_text,
+def build(policy, action_text, amount_cop, address_text,
           approved_crops, executed_crops, approval, seed,
           receipt_id=None, time=None, agent="wonder@marta-shop",
           signed_by=None, approved_read=None, executed_read=None,
           executed_hashes=None, status=CONFIRMED, blocked_at=None):
     """Assemble and sign a receipt.
 
-    approved_crops / executed_crops: {'amount': bytes, 'recipient': bytes};
+    approved_crops / executed_crops: {'amount': bytes, 'address': bytes};
     executed_crops is None when nothing was captured after the click (then
     `executed_hashes` may still carry the hashes). approved_read /
-    executed_read: {'amount': text, 'recipient': text} read from the crops.
+    executed_read: {'amount': text, 'address': text} read from the crops.
     A `blocked` receipt has no executed side and says where (`blocked_at`).
     """
     approved = hash_crops(approved_crops)
@@ -143,7 +140,7 @@ def build(policy, action_text, amount_cop, recipient_text,
         "agent": agent,
         "action": action_text,
         "amount_cop": amount_cop,
-        "recipient": recipient_text,
+        "address": address_text,
         "policy_sha256": policy.sha256(),
         "approved": approved,
         "executed": executed,

@@ -1,9 +1,9 @@
 """Policy: the compiled, signed output of Marta's spoken mandate (F1).
 
 The interceptor enforces this; the agent cannot change it. The policy ties the
-recipient by **name and account** (F1-D2): a payment passes only if both appear
-in what the pixels read for the recipient, so changing the account while the
-name stays visible no longer slips through.
+delivery destination by **name and address** (F1-D2): an order passes only if
+both appear in what the pixels read for "Deliver to", so changing the address
+while the shop's name stays visible does not slip through.
 
 A policy's identity is the sha256 over its canonical content (every field
 except `sha256` and `signature`). An Ed25519 signature of the owner's key
@@ -29,8 +29,8 @@ class Policy:
         self._stored_sha = data.get("sha256", "")
 
         rules = _merge_rules(data.get("rules", []))
-        self.pay_only = _parse_pay_only(rules.get("pay_only", []))
-        self.max_per_payment_cop = int(rules.get("max_per_payment_cop", 0))
+        self.deliver_only = _parse_deliver_only(rules.get("deliver_only", []))
+        self.max_per_order_cop = int(rules.get("max_per_order_cop", 0))
         self.ask_before = rules.get("ask_before", "")
         self._raw = data
 
@@ -83,32 +83,32 @@ class Policy:
 
     # -- enforcement --------------------------------------------------------
 
-    def pay_only_text(self):
-        return ", ".join("%s · %s" % (p["name"], p["account"]) for p in self.pay_only) or "(none)"
+    def deliver_only_text(self):
+        return ", ".join("%s · %s" % (p["name"], p["address"]) for p in self.deliver_only) or "(none)"
 
-    def recipient_allowed(self, recipient_text):
-        """Pass only if an allowed name appears AND the accounts read for the
-        recipient are exactly its account (F1-D2): a crop that also shows
-        another account does not pass (review of F4)."""
+    def address_allowed(self, address_text):
+        """Pass only if an allowed name appears AND the addresses read for
+        "Deliver to" are exactly its address (F1-D2): a crop that also shows
+        another address does not pass (review of F4)."""
         from receipts.receipt import norm_read
-        t = (recipient_text or "").lower()
-        accounts = norm_read("recipient", recipient_text or "")
-        return any(p["name"].lower() in t and accounts == norm_read("recipient", p["account"])
-                   for p in self.pay_only)
+        t = (address_text or "").lower()
+        addresses = norm_read("address", address_text or "")
+        return any(p["name"].lower() in t and addresses == norm_read("address", p["address"])
+                   for p in self.deliver_only)
 
-    def allowed_accounts(self):
+    def allowed_addresses(self):
         from receipts.receipt import norm_read
-        return {norm_read("recipient", p["account"]) for p in self.pay_only}
+        return {norm_read("address", p["address"]) for p in self.deliver_only}
 
     def amount_allowed(self, amount_cop):
-        return 0 < int(amount_cop) <= self.max_per_payment_cop
+        return 0 < int(amount_cop) <= self.max_per_order_cop
 
-    def check_payment(self, recipient_text, amount_cop):
+    def check_order(self, address_text, amount_cop):
         """Return (ok, reason). reason is a short human string when not ok."""
-        if not self.recipient_allowed(recipient_text):
-            return False, "recipient is not in pay-only list (%s)" % self.pay_only_text()
+        if not self.address_allowed(address_text):
+            return False, "delivery address is not in the deliver-only list (%s)" % self.deliver_only_text()
         if not self.amount_allowed(amount_cop):
-            return False, "amount %s exceeds max %s" % (amount_cop, self.max_per_payment_cop)
+            return False, "amount %s exceeds max %s" % (amount_cop, self.max_per_order_cop)
         return True, ""
 
 
@@ -134,15 +134,15 @@ def _merge_rules(rule_list):
     return out
 
 
-def _parse_pay_only(raw):
-    """Accept the F1 form [{name, account}] and tolerate a bare [name] list."""
+def _parse_deliver_only(raw):
+    """Accept the F1 form [{name, address}] and tolerate a bare [name] list."""
     out = []
     for entry in raw or []:
         if isinstance(entry, dict):
             out.append({"name": str(entry.get("name", "")).strip(),
-                        "account": str(entry.get("account", "")).strip()})
+                        "address": str(entry.get("address", "")).strip()})
         else:
-            out.append({"name": str(entry).strip(), "account": ""})
+            out.append({"name": str(entry).strip(), "address": ""})
     return out
 
 
@@ -151,8 +151,8 @@ if __name__ == "__main__":
     from common.config import POLICY_PATH
     p = load(sys.argv[1] if len(sys.argv) > 1 else POLICY_PATH)
     print("owner        :", p.owner)
-    print("pay_only     :", p.pay_only)
-    print("max_cop      :", p.max_per_payment_cop)
+    print("deliver_only :", p.deliver_only)
+    print("max_cop      :", p.max_per_order_cop)
     print("ask_before   :", p.ask_before)
     print("sha256       :", p.sha256())
     print("short        :", p.short_sha())

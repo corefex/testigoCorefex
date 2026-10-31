@@ -6,18 +6,17 @@ labels, promos. Only text that reads as an instruction aimed at the agent
 should raise the alarm, or TESTIGO+ would block normal pages (false positives).
 
 A line is flagged if, in English or Spanish, it has any of these signals (F5-D1):
-  - a payment account number (a line carrying an account that appears in only
-    one channel is suspicious whatever the account);
-  - a term that addresses an agent together with a payment/action verb.
+  - a street address (Calle/Carrera/... number # number - number; a line
+    carrying an address that appears in only one channel is suspicious
+    whatever the address);
+  - a term that addresses an agent together with a delivery or confirmation
+    verb (or a change of the delivery address).
 
 Known limit (F5-D4): an instruction written without any of these signals would
 not be flagged. It is assumed and measured (a WitnessBench case), not hidden.
 """
 
-import re
-
-# Nequi-style account the demo uses (300-XXX-0000, 310-XXX-4417), case-insensitive.
-ACCOUNT_RE = re.compile(r"\b\d{3}-[\dx]{3}-\d{4}\b", re.IGNORECASE)
+from common.address import ADDRESS_RE
 
 # Terms that address an agent, in English and Spanish.
 AGENT_TERMS = (
@@ -25,23 +24,25 @@ AGENT_TERMS = (
     "agente", "asistente", "ia", "bot",
 )
 
-# Payment / change-of-target verbs, in English and Spanish.
+# Delivery / confirmation / change-of-destination verbs, in English and Spanish.
 ACTION_VERBS = (
-    "pay", "transfer", "send", "change recipient", "update the recipient",
-    "update recipient", "set recipient", "change the recipient",
-    "pagar", "paga", "transferir", "transfiere", "enviar", "envía", "envia",
-    "cambia el destinatario", "cambiar el destinatario", "cambia destinatario",
-    "actualiza el destinatario", "actualizar el destinatario",
+    "deliver", "ship", "send", "confirm",
+    "change the delivery address", "change delivery address", "change the address",
+    "update the delivery address", "update the address", "set the address",
+    "entrega", "entregar", "envía", "envia", "enviar", "confirma", "confirmar",
+    "cambia la dirección", "cambia la direccion", "cambiar la dirección",
+    "actualiza la dirección", "actualiza la direccion", "actualizar la dirección",
 )
 
 
 def looks_like_instruction(text):
     """True when a divergent line reads as an instruction aimed at the agent."""
-    t = " ".join(str(text or "").split()).lower()
+    t = " ".join(str(text or "").split())
     if not t:
         return False
-    if ACCOUNT_RE.search(t):
+    if ADDRESS_RE.search(t):
         return True
+    t = t.lower()
     if any(a in t for a in AGENT_TERMS) and any(v in t for v in ACTION_VERBS):
         return True
     return False

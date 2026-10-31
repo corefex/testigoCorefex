@@ -1,11 +1,11 @@
 """Gate g4: SAM 3.1 finds the critical elements on 30 captures (F0 §13).
 
-  .venv/bin/python -m gate.g4_sam_iou [--limit N] [--make] [--phrases "pay button" button]
+  .venv/bin/python -m gate.g4_sam_iou [--limit N] [--make] [--phrases "confirm button" button]
 
 Runs the real pixel channel (interceptor.channels.SamSparkChannel, F4-D5:
-Spark's rough boxes refined by SAM with a box prompt, and SAM's "pay button"
+Spark's rough boxes refined by SAM with a box prompt, and SAM's "confirm button"
 by name) on each capture from gate.g4_make_captures, and compares the box it
-returns for the amount, the recipient and the pay button with the reference
+returns for the amount, the address and the confirm button with the reference
 box from the portal's data-testid elements. A missing region counts as IoU 0,
 and so does a missing reference box (with its reason, never skipped). An API
 failure (the channel's `errors`) is recorded apart and its capture is not
@@ -29,7 +29,7 @@ from interceptor.channels import Capture, SamSparkChannel
 
 IOU_MIN = 0.5
 SHARE_MIN = 0.70
-LABELS = ("amount", "recipient", "pay button")
+LABELS = ("amount", "address", "confirm button")
 
 
 def iou(a, b):
@@ -118,7 +118,7 @@ def main(argv=None):
         for phrase in args.phrases:
             found, _ = meta.segment(png, phrase)
             best = max(found, key=lambda b: b.get("confidence") or 0)["box"] if found else None
-            phrase_rows[phrase].append(round(iou(t["truth"].get("pay button"), best), 3))
+            phrase_rows[phrase].append(round(iou(t["truth"].get("confirm button"), best), 3))
         print("g4: %s %s" % (t["name"], " ".join("%s=%.2f" % (e["label"], e["iou"])
                                                 for e in elements if e["capture"] == t["name"])),
               flush=True)

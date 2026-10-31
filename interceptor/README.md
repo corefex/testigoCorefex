@@ -6,7 +6,7 @@ click it runs `verify`. This folder is the **decision core** — pure, standard
 library only, no browser, model or network — so it is testable today and wires
 to Playwright / SAM 3.1 / Spark / FastAPI later without changing the rules.
 
-Everything is a simulation: fake supplier, shop and attacker account.
+Everything is a simulation: fake supplier, shop and attacker address.
 
 ## Run
 
@@ -24,21 +24,21 @@ detection works on real captures.
 
 | # | Condition (read from the **pixels**, never the DOM) | Verdict | Action |
 |---|---|---|---|
-| 1 | SAM can't find amount, recipient or pay button ≥ 0.50 confidence | `cannot_verify` | block |
+| 1 | SAM can't find amount, address or confirm button ≥ 0.50 confidence | `cannot_verify` | block |
 | 2 | Text in the code not drawn, or drawn text not in the code | `divergence` | block |
-| 3 | Pixel recipient/amount breaks the policy | `policy_violation` | block |
-| 4 | All agree and it's a payment | `ok` | ask for approval |
+| 3 | Pixel delivery address/total breaks the policy (or a stray address is on screen) | `policy_violation` | block |
+| 4 | All agree and it confirms the order | `ok` | ask for approval |
 | 5 | After the click, executed crops ≠ approved crops | `mismatch` | flag the receipt |
 
 Rule 1 runs first on purpose: a comparison you can't read is not a pass. The
-recipient and amount used for rule 3 come from the pixel channel, so a hidden
-or swapped DOM value can't push a payment through.
+address and amount used for rule 3 come from the pixel channel, so a hidden
+or swapped DOM value can't push an order to another address.
 
 ## Pieces
 
 ```
 interceptor/
-  policy.py      load + hash the signed policy; recipient/amount checks
+  policy.py      load + hash the signed policy; address/amount checks
   events.py      constructors for every event (check.result, verify.result, …)
   channels.py    Capture + PixelChannel; FixtureChannel (tests) and the
                  SamSparkChannel stub (plug SAM 3.1 + Spark here)

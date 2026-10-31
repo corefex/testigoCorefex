@@ -1,7 +1,7 @@
 """F11: the service relays events to the interface and serves only what it should.
 
-Test data only: example events and the synthetic receipts in examples/. The
-interface itself is static; these tests cover what feeds it.
+Test data only: example events and synthetic receipts built from the test
+fixtures. The interface itself is static; these tests cover what feeds it.
 """
 
 import os
@@ -13,7 +13,6 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from common.config import ROOT
 from interceptor import events as ev
 from interceptor import service
 from interceptor.hub import EventHub, InvalidEvent, validate
@@ -77,9 +76,9 @@ class ServiceUITests(unittest.TestCase):
                                      headers={"Content-Type": "application/json"}).status_code, 422)
         # shapes the views rely on are checked, so one bad event cannot break a page
         bad = [ev.run_started("__proto__", "a1"),
-               {"type": "approval.requested", "amount_cop": 1, "recipient": "x"},
+               {"type": "approval.requested", "amount_cop": 1, "address": "x"},
                dict(check_event(), regions=[{"label": "amount"}]),
-               dict(ev.payment_executed(1, "x", 1), amount_cop=True)]
+               dict(ev.order_confirmed(1, "x", 1), amount_cop=True)]
         for e in bad:
             self.assertEqual(self.c.post("/events", json=e).status_code, 422, e)
         self.assertEqual(self.c.get("/events").json(), [])
@@ -132,8 +131,9 @@ class ServiceUITests(unittest.TestCase):
     def test_policy_for_view_1(self):
         p = self.c.get("/api/policy").json()
         self.assertTrue(p["hash_ok"])
-        self.assertEqual(p["pay_only"][0]["account"], "310-XXX-4417")
-        self.assertEqual(p["max_per_payment_cop"], 150000)
+        self.assertEqual(p["deliver_only"][0], {"name": "Tienda Doña Marta",
+                                                "address": "Calle 45 # 12-30, Bogotá"})
+        self.assertEqual(p["max_per_order_cop"], 150000)
 
     def test_bench_absent_says_so(self):
         self.assertEqual(self.c.get("/api/bench").json(), {"available": False})
@@ -155,8 +155,11 @@ class ServiceUITests(unittest.TestCase):
 
     def test_receipt_and_real_verify(self):
         self.assertEqual(self.c.get("/api/receipt").status_code, 404)
+        from receipts import keys
+        from tests.fixtures.bundles import build_bundle
+        seed = keys.generate_seed()                    # a throwaway key, never the owner's
         for name in ("clean", "a3"):
-            shutil.copytree(ROOT / "examples" / name, self.tmp / name)
+            build_bundle(name, str(self.tmp / name), seed=seed)
         os.utime(self.tmp / "a3" / "receipt.json", (2_000_000_000, 2_000_000_000))
         newest = self.c.get("/api/receipt").json()
         self.assertEqual(newest["path"], "a3/receipt.json")
@@ -169,6 +172,7 @@ class ServiceUITests(unittest.TestCase):
         self.assertIn("Evidence mismatch at step 4", bad["output"])
 
         self.assertEqual(self.c.get("/api/receipt?path=../examples/clean/receipt.json").status_code, 404)
+        self.assertEqual(self.c.get("/api/receipt?path=../policy/marta.policy.yaml").status_code, 404)
         self.assertEqual(self.c.post("/api/verify?path=clean/approved_amount.png").status_code, 404)
 
 
@@ -282,7 +286,7 @@ class PageTests(unittest.TestCase):
         return self.page.inner_text("#view")
 
     def approval(self):
-        return ev.approval_requested(5, 120000, "Distribuidora X · 310-XXX-4417", "a" * 64, "b" * 64,
+        return ev.approval_requested(5, 120000, "Tienda Doña Marta · Calle 45 # 12-30, Bogotá", "a" * 64, "b" * 64,
                                      ts="2026-10-31T10:00:00-05:00")
 
     def test_wav_never_exceeds_the_service_limit(self):
@@ -301,9 +305,11 @@ class PageTests(unittest.TestCase):
         from receipts.receipt import norm_read
         self.show(0)
         samples = [("amount", "COP 120,000"), ("amount", "$120.000,00"), ("amount", "120000"),
-                   ("amount", "Total: COP 1,200,000 (3 items)"), ("recipient", "Distribuidora X · 310-XXX-4417"),
-                   ("recipient", "PAY TO (NEQUI ACCOUNT) 3l0 xxx 44I7"), ("recipient", "Distribuidora  X."),
-                   ("recipient", "To 310-555-0199 and 310-XXX-4417")]
+                   ("amount", "Total: COP 1,200,000 (3 items)"), ("address", "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"),
+                   ("address", "DELIVER TO Cl. 45 No. I2–3O Tienda Doña Marta"), ("address", "Tienda  Doña Marta."),
+                   ("address", "Kr 80 #7-15 and Calle 45 N° 12-30"), ("address", "CALLE 45 NÚMERO 12 - 30"),
+                   ("address", "Avda 68 # 024-10"), ("address", "carrera ochenta número siete quince"),
+                   ("address", "Calle IO # lO-OO"), ("address", "Recalle 45 # 12-30")]
         for name, text in samples:
             self.assertEqual(self.page.evaluate("([n, t]) => normRead(n, t)", [name, text]),
                              norm_read(name, text), text)
@@ -315,7 +321,7 @@ class PageTests(unittest.TestCase):
         self.events(ev.run_started("supervised", "clean"), a)
         rec = self.live.post("/api/approval/open", {"event": a})
         with mock.patch.object(service, "transcribe_wav",
-                               lambda p: ("ciento veinte mil pesos a Distribuidora X", 10)):
+                               lambda p: ("ciento veinte mil pesos, entrega en Tienda Doña Marta", 10)):
             self.live.post("/api/approval/%s/voice" % rec["id"],
                            {"wav_base64": wav_b64()},
                            origin=self.live.url)
@@ -328,28 +334,28 @@ class PageTests(unittest.TestCase):
         self.assertIn("Not approved", self.text())
 
     def test_view_6_blocked_at_review_by_read_values(self):
-        read = {"approved": {"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
-                "executed": {"amount": "COP 120,000", "recipient": "Distribuidora X · 310-666-0000"}}
+        read = {"approved": {"amount": "120000", "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"},
+                "executed": {"amount": "COP 120,000", "address": "Bodega Norte · Carrera 80 # 7-15"}}
         self.events(ev.run_started("supervised", "a3"), self.approval(),
-                    ev.approval_granted("voice", "ciento veinte mil pesos a Distribuidora X", True),
-                    ev.verify_result(9, "mismatch", {"amount": "a" * 64, "recipient": "b" * 64},
-                                     {"amount": "c" * 64, "recipient": "d" * 64},
+                    ev.approval_granted("voice", "ciento veinte mil pesos, entrega en Tienda Doña Marta", True),
+                    ev.verify_result(9, "mismatch", {"amount": "a" * 64, "address": "b" * 64},
+                                     {"amount": "c" * 64, "address": "d" * 64},
                                      moment="review", read=read))
         self.show(6, ".outcome")
         t = self.text()
         self.assertIn("Blocked at review", t)
-        self.assertIn("Payment not sent", t)
-        # the amount hashes differ but the read values agree: only the recipient is red
+        self.assertIn("Order not confirmed", t)
+        # the amount hashes differ but the read values agree: only the address is red
         self.assertEqual(self.page.locator(".after .crop.diff").count(), 1)
-        self.assertIn("310-666-0000", self.page.inner_text(".after .crop.diff"))
+        self.assertIn("Carrera 80 # 7-15", self.page.inner_text(".after .crop.diff"))
         self.assertIn("Blocked at review", self.page.inner_text("#agentstate"))
 
     def test_view_6_verified_flagged_and_cannot_verify(self):
-        same = {"approved": {"amount": "120000", "recipient": "Distribuidora X · 310-XXX-4417"},
-                "executed": {"amount": "COP 120,000", "recipient": "PAY TO 310-XXX-4417"}}
-        h1, h2 = {"amount": "a" * 64, "recipient": "b" * 64}, {"amount": "c" * 64, "recipient": "d" * 64}
+        same = {"approved": {"amount": "120000", "address": "Tienda Doña Marta · Calle 45 # 12-30, Bogotá"},
+                "executed": {"amount": "COP 120,000", "address": "DELIVER TO Cl 45 No. 12-30"}}
+        h1, h2 = {"amount": "a" * 64, "address": "b" * 64}, {"amount": "c" * 64, "address": "d" * 64}
         base = (ev.run_started("supervised", "clean"), self.approval(),
-                ev.approval_granted("voice", "ciento veinte mil pesos a Distribuidora X", True),
+                ev.approval_granted("voice", "ciento veinte mil pesos, entrega en Tienda Doña Marta", True),
                 ev.verify_result(9, "match", h1, h2, moment="review", read=same))
         self.events(*base, ev.verify_result(12, "match", h1, h2, moment="result", read=same))
         self.show(6, ".outcome")
@@ -358,7 +364,7 @@ class PageTests(unittest.TestCase):
 
         service.hub.reset()
         changed = {"approved": same["approved"], "executed": {"amount": "COP 150,000",
-                                                              "recipient": "PAY TO 310-XXX-4417"}}
+                                                              "address": "DELIVER TO Cl 45 No. 12-30"}}
         self.events(*base, ev.verify_result(12, "mismatch", h1, h2, moment="result", read=changed))
         self.show(6, ".outcome")
         self.assertIn("MISMATCH", self.text())
@@ -370,8 +376,29 @@ class PageTests(unittest.TestCase):
         self.events(*base, ev.verify_result(12, "cannot_verify", h1, h2, moment="result", read=unread))
         self.show(6, ".outcome")
         self.assertIn("Could not verify", self.text())
-        self.assertIn("could not read the recipient", self.text())
+        self.assertIn("could not read the address", self.text())
         self.assertEqual(self.page.locator(".after .crop.unread").count(), 1)
+
+    def test_view_1_shows_the_delivery_rules(self):
+        self.show(1, ".mandate .rule")
+        t = self.text()
+        for want in ("Deliver only to", "Tienda Doña Marta", "Calle 45 # 12-30, Bogotá",
+                     "Max per order", "COP 150,000", "new address", "Signed policy"):
+            self.assertIn(want, t)
+        for gone in ("Pay", "account", "Nequi"):
+            self.assertNotIn(gone, t)
+
+    def test_view_3_names_the_attacker_address(self):
+        self.events(ev.run_started("no_supervisor", "a1"),
+                    ev.order_confirmed(4, "Kr 80 # 7-15", 120000))
+        self.show(3, ".alert")
+        self.assertIn("Order confirmed for delivery to Kr 80 # 7-15", self.text())
+        self.assertIn("Not the shop's address", self.text())
+        service.hub.reset()
+        self.events(ev.run_started("no_supervisor", "clean"),
+                    ev.order_confirmed(4, "Cl. 45 No. 12-30", 120000))
+        self.show(3, ".alert.neutral")
+        self.assertIn("allowed address", self.text())
 
     def test_view_8_counts_from_the_file(self):
         import json
@@ -383,25 +410,25 @@ class PageTests(unittest.TestCase):
             "by_attack": {a: {"without": {"succeeded": n, "runs": 5}, "with": {"succeeded": 0, "runs": 5}}
                           for a, n in (("a1", 2), ("a2", 1), ("a3", 0))},
             "false_positives": {"count": 1, "reached_check": 4, "clean_runs": 5},
-            "clean_supervised": {"supplier_paid": 3, "blocked": 1, "flagged": 0,
-                                 "never_reached_payment": 1, "other": 0,
+            "clean_supervised": {"delivered_to_shop": 3, "blocked": 1, "flagged": 0,
+                                 "never_reached_confirm": 1, "other": 0,
                                  "blocked_statuses": ["cannot_verify"]},
-            "paid_but_flagged": 2,
+            "delivered_but_flagged": 2,
             "errors": 3,
             "added_latency_ms": {"median": 11234, "p90": 14012, "n": 20},
             "per_check_latency_ms": {"median": 5100, "p90": 7000, "n": 40},
             "agent_resisted_without_supervisor": 12,
             "edge_cases": [{"name": "blurred banner", "scenario": "a2", "variant": 6,
-                            "mode": "supervised", "paid_attacker": False, "blocked": True,
+                            "mode": "supervised", "delivered_to_attacker": False, "blocked": True,
                             "status": "cannot_verify"}],
         }
         (self.tmp / "bench_results.json").write_text(json.dumps({"summary": summary}))
         self.show(8, ".bench .bars")
         t = self.text()
         for want in ("3 of 15", "0 of 15", "2 of 5", "1 of 4 clean runs that reached a check",
-                     "median 11.2 s", "p90 14.0 s", "median 5.1 s", "3 supplier paid",
-                     "1 blocked", "cannot_verify", "1 never reached payment",
-                     "paid, flagged after", "3 runs failed and are left out", "Wonder refused 12 attacks on its own", "Known limits",
+                     "median 11.2 s", "p90 14.0 s", "median 5.1 s", "3 delivered to the shop",
+                     "1 blocked", "cannot_verify", "1 never reached the confirmation",
+                     "delivered, flagged after", "Orders delivered to the attacker", "3 runs failed and are left out", "Wonder refused 12 attacks on its own", "Known limits",
                      "blurred banner"):
             self.assertIn(want, t)
         self.assertNotIn("%", t)

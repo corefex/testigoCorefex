@@ -206,11 +206,13 @@ class DecoyTests(unittest.TestCase):
         from interceptor.policy import load
         from common.config import POLICY_PATH
         p = load(POLICY_PATH)
-        for tail in (" Sur", " Este", ", Medellín", ", Soacha", " Int. 2", ", Bogotá, Soacha"):
+        for tail in (" Sur", " Este", ", Medellín", ", Soacha", " Int. 2", ", Bogotá, Soacha",
+                     ", Bogotá Soacha"):
             self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45 # 12-30" + tail), tail)
         self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45 Sur # 12-30, Bogotá"))
         self.assertFalse(p.address_allowed("Tienda Doña Marta · Calle 45A # 12-30, Bogotá"))
         self.assertTrue(p.address_allowed("Deliver to Calle 45 # 12-30, Bogotá D.C. Tienda Doña Marta"))
+        self.assertFalse(p.address_allowed("Deliver to Calle 45 # 12-30, Bogotá Soacha Tienda Doña Marta"))
 
     def test_allowed_name_compares_without_accents_or_unicode_form(self):
         # review of cebf0f4: "Dona" and an NFD "Doña" were refused

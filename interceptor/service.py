@@ -12,6 +12,7 @@ Routes
   GET  /api/policy   the active signed policy (view 1; common.config.policy_path)
   POST /api/mandate/draft  a WAV of the mandate (base64 in JSON) -> Voice ->
                      policy/compile.py -> an unsigned draft, or why it was refused
+  POST /api/mandate/discard {"id"}: forget that draft
   POST /api/mandate/sign   {"id"}: sign that draft with the owner key and make it
                      the active policy (RUNS_DIR/policy/active.policy.yaml)
   GET  /api/receipt  the newest receipt.json under runs/, or ?path= (view 7)
@@ -167,6 +168,8 @@ def status():
         policy = load_policy(config.policy_path())
         policy_sha = policy.short_sha()
         policy_ok = policy.hash_matches_stored()
+    except config.PolicyNotTrusted:
+        policy_sha, policy_ok = "not trusted (active policy)", False
     except Exception as e:  # noqa: BLE001
         policy_sha, policy_ok = "unreadable (%s)" % type(e).__name__, False
     return {
@@ -504,6 +507,7 @@ def write_active_policy(signed):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+    config.archive_policy(dest)      # kept by hash: earlier receipts still verify
     return dest
 
 
@@ -515,24 +519,40 @@ async def mandate_sign(request: Request):
     from receipts import keys
     local_only(request)
     body = await json_body(request, MAX_JSON_BYTES)
-    draft = _drafts.pop(body.get("id"), None) if isinstance(body.get("id"), str) else None
+    draft_id = body.get("id")
+    draft = _drafts.get(draft_id) if isinstance(draft_id, str) else None
     if draft is None:
         raise HTTPException(409, "no such draft: record the mandate again")
     key_path = config.settings().signing_key_path
     if not key_path.is_file():
-        _drafts[body["id"]] = draft            # nothing changed; the owner can retry after keygen
         raise HTTPException(409, "the owner key is not on this machine (run: testigo keygen)")
     seed = keys.load_seed(key_path)
     signed, _ = sign_policy_dict(draft["policy"], seed)
     dest = await run_in_threadpool(write_active_policy, signed)
+    # Only now is the draft used up: a failed sign above leaves it to retry.
+    if _drafts.get(draft_id) is draft:
+        _drafts.pop(draft_id, None)
     return dict(policy_view(load_policy(dest), dest), status="signed")
+
+
+@app.post("/api/mandate/discard")
+async def mandate_discard(request: Request):
+    """{"id"}: forget that draft (the page's Discard). Nothing else changes."""
+    local_only(request)
+    body = await json_body(request, MAX_JSON_BYTES)
+    draft_id = body.get("id")
+    found = isinstance(draft_id, str) and _drafts.pop(draft_id, None) is not None
+    return {"status": "discarded" if found else "none"}
 
 
 # -- files the views read ---------------------------------------------------
 
 @app.get("/api/policy")
 def api_policy():
-    path = config.policy_path()
+    try:
+        path = config.policy_path()
+    except config.PolicyNotTrusted as e:
+        raise HTTPException(409, "the active policy is not trusted: %s" % e)
     return policy_view(load_policy(path), path)
 
 

@@ -22,12 +22,12 @@ the city, the spacing, the case and the reader's small slips do not count:
                 explicit separator a plain space also works ("# 7 15")
 
 Whatever follows the address is part of it (review of cebf0f4: "Calle 45 #
-12-30 Sur", "..., Medellín", "... Int. 2" are other addresses): up to four
-words after it, up to a punctuation mark other than "," and ".", or the next
-address. The city "Bogotá"/"Bogota" and "D.C." are dropped; after the city a
-word that is not a quadrant or a complement (Int, Apto, Local, Torre, ...)
-ends the address unless a comma introduces it (the portal shows the delivery
-point's name right after the address field).
+12-30 Sur", "..., Medellín", "..., Bogotá Soacha", "... Int. 2" are other
+addresses): up to four words after it, up to a punctuation mark other than ","
+and ".", or the next address. The city "Bogotá"/"Bogota" and "D.C." are
+dropped, and so is the shop's name when it is exactly all that is left (the
+portal shows the delivery point's name right after the address field:
+"Calle 45 # 12-30, Bogotá Tienda Doña Marta").
 
 `canonical_addresses(text)` gives every address in the text as
 "calle 45 # 12-30" / "calle 45a bis # 12-30 sur", sorted and without
@@ -37,6 +37,8 @@ ports these rules (tests/test_ui.py checks both agree).
 
 import re
 import unicodedata
+
+from common.config import SHOP
 
 STREET_TYPES = {
     "calle": "calle", "cll": "calle", "cl": "calle",
@@ -48,12 +50,11 @@ STREET_TYPES = {
 }
 
 QUADRANTS = ("sur", "este", "norte", "oeste")
-# Words that may follow the city and still belong to the address.
-COMPLEMENTS = frozenset(QUADRANTS + (
-    "bis", "int", "interior", "apto", "apartamento", "ap", "local", "loc", "of",
-    "oficina", "torre", "bloque", "bl", "casa", "piso", "lote", "manzana", "mz", "etapa"))
 # The city of every address in the demo: dropped from the canonical form.
 CITY_WORDS = frozenset({"bogota", "dc"})
+# The portal shows the delivery point's name right after the address field;
+# exactly that name (and nothing more) after an address is not part of it.
+SHOP_NAME = SHOP["name"]
 TAIL_MAX = 4
 
 # Longest first, so "cra" is not read as "cr" + "a".
@@ -94,6 +95,9 @@ def fold(text):
     return " ".join(text.lower().split())
 
 
+_SHOP_WORDS = [w.replace(".", "") for w in fold(SHOP_NAME).split()]
+
+
 def _digits(group):
     return group.translate(_OCR_DIGITS).lstrip("0") or "0"
 
@@ -109,25 +113,30 @@ def _is_word_start(c):
     return c.isalpha() or c in "0123456789"
 
 
-def _tail(text, i):
-    """The words that follow an address at text[i:] (see the module docstring)."""
-    out, city, n = [], False, len(text)
-    while len(out) < TAIL_MAX:
-        comma = False
+def _segment(text, i):
+    """The words after an address at text[i:], up to a punctuation mark other
+    than "," and ".", the next address, or the end (folded, dots removed)."""
+    words, n = [], len(text)
+    while True:
         while i < n and (text[i].isspace() or text[i] == ","):
-            comma = comma or text[i] == ","
             i += 1
         if i >= n or not _is_word_start(text[i]) or ADDRESS_RE.match(text, i):
-            break
+            return words
         j = i
         while j < n and (_is_word_start(text[j]) or text[j] == "."):
             j += 1
-        word, i = fold(text[i:j]).replace(".", ""), j
-        if word in CITY_WORDS:
-            city = True
-        elif city and not comma and word not in COMPLEMENTS:
+        words.append(fold(text[i:j]).replace(".", ""))
+        i = j
+
+
+def _tail(text, i):
+    """The words that follow an address and belong to it (module docstring):
+    every word but the city, unless the rest is exactly the shop's name."""
+    out, words = [], _segment(text, i)
+    for k, word in enumerate(words):
+        if words[k:] == _SHOP_WORDS or len(out) == TAIL_MAX:
             break
-        else:
+        if word not in CITY_WORDS:
             out.append(word)
     return out
 

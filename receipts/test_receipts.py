@@ -527,7 +527,10 @@ class ReadNormalizationTests(unittest.TestCase):
                   "Calle 45 # 12-30 Oeste", "Calle 45 Sur # 12-30", "Calle 45 # 12-30, Medellín",
                   "Calle 45 # 12-30, Soacha", "Calle 45 # 12-30 Int. 2", "Calle 45 # 12-30 Apto 301",
                   "Calle 45 # 12-30, Bogotá, Soacha", "Calle 45 # 12-30, Bogotá Sur",
-                  "Calle 45 # 12-30 Tienda Doña Marta"):
+                  "Calle 45 # 12-30, Bogotá Soacha", "Calle 45 # 12-30 Bogotá Medellín",
+                  "Calle 45 # 12-30, Bogotá Tienda Doña Marta Soacha",
+                  "Calle 45 # 12-30, Bogotá Soacha Tienda Doña Marta",
+                  "Calle 45 # 12-30, Bogotá Bodega Norte"):
             self.assertNotEqual(norm_read("address", s), shop, s)
         self.assertEqual(norm_read("address", "Calle 45 # 12-30 Sur"), "calle 45 # 12-30 sur")
         self.assertEqual(norm_read("address", "Calle 45 Sur # 12-30"), "calle 45 # 12-30 sur")
@@ -541,7 +544,8 @@ class ReadNormalizationTests(unittest.TestCase):
                   "Calle 45 # 12-30, Bogotá, D.C.", "Calle 45 # 12-30, BOGOTÁ",
                   "Calle 45 # 12-30, Bogota\u0301 Tienda Doña Marta",
                   "Calle 45 # 12-30, Bogotá — Tienda Doña Marta", "Calle 45 # 12-30 (simulado)",
-                  "Calle 45 # 12-30. Next line"):
+                  "Calle 45 # 12-30. Next line", "Calle 45 # 12-30 Tienda Dona Marta",
+                  "Calle 45 # 12-30, Bogotá, TIENDA DOÑA MARTA"):
             self.assertEqual(norm_read("address", s), "calle 45 # 12-30", s)
 
     def test_letter_and_bis_suffixes(self):

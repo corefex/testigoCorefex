@@ -301,6 +301,11 @@ class PageTests(unittest.TestCase):
         self.assertLessEqual(seconds, 18.0)
         self.assertEqual(self.page.evaluate("MAX_REC_S"), 18)
 
+    def test_shop_name_matches_config(self):
+        from common.config import SHOP
+        self.show(0)
+        self.assertEqual(self.page.evaluate("SHOP_NAME"), SHOP["name"])
+
     def test_norm_read_matches_python(self):
         from receipts.receipt import norm_read
         self.show(0)
@@ -325,6 +330,9 @@ class PageTests(unittest.TestCase):
                    ("address", "Calle \u0664\u0665 # 12-30"), ("address", "Calle \uff14\uff15 # 12-30"),
                    ("address", "tran\u017fver\u017fal 3 # 4-5"), ("address", "Calle 45 # 12-30 \U0001d400\U0001d401"),
                    ("address", "Calle 45 # 12-30, MEDELLÍN Int"),
+                   ("address", "Calle 45 # 12-30, Bogotá Soacha"), ("address", "Calle 45 # 12-30 Tienda Dona Marta"),
+                   ("address", "Calle 45 # 12-30, Bogotá Tienda Doña Marta Soacha"),
+                   ("address", "Calle 45 # 12-30, Bogotá Soacha Tienda Doña Marta"),
                    ("amount", "COP \u0661\u0662\u0660.000"), ("amount", "COP 120.000 \u0661\u0662")]
         for name, text in samples:
             self.assertEqual(self.page.evaluate("([n, t]) => normRead(n, t)", [name, text]),

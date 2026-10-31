@@ -204,19 +204,31 @@ def _check_executed(receipt, approved, evidence_dir):
 def verify_receipt(receipt_path, evidence_dir=None,
                    policy_path=None, pinned_pubkey=None):
     """Run the four checks. Raises MalformedReceipt for a receipt of the wrong shape.
-    `policy_path` None: the active policy (common.config.policy_path)."""
-    policy_path = policy_path or config.policy_path()
+    `policy_path` None: the policy whose sha256 the receipt names, the
+    committed one or one signed here (archived by hash, its owner signature
+    checked with `pinned_pubkey` or the owner key on this machine), so a policy
+    signed later never breaks an earlier receipt. An explicit `policy_path`
+    overrides: the receipt must match that file."""
     receipt = load_receipt(receipt_path)
     checks = []
 
     # 1. policy
-    try:
-        pol = load_policy(policy_path)
-        ok1 = pol.sha256() == receipt.get("policy_sha256")
-        d1 = "matches signed policy %s…%s" % (pol.sha256()[:6], pol.sha256()[-4:]) if ok1 \
-            else "receipt policy hash does not match %s" % policy_path
-    except Exception as e:  # policy missing/unreadable
-        ok1, d1 = False, "cannot load policy: %s" % e
+    want = receipt.get("policy_sha256")
+    if policy_path:
+        try:
+            pol = load_policy(policy_path)
+            ok1 = pol.sha256() == want
+            d1 = "matches signed policy %s…%s" % (pol.sha256()[:6], pol.sha256()[-4:]) if ok1 \
+                else "receipt policy hash does not match %s" % config.runs_label(policy_path)
+        except Exception as e:  # policy missing/unreadable
+            ok1, d1 = False, "cannot load policy %s: %s" % (config.runs_label(policy_path),
+                                                            type(e).__name__)
+    else:
+        try:
+            pol, label = config.find_policy_by_hash(want, pinned_pubkey)
+            ok1, d1 = True, "matches signed policy %s…%s (%s)" % (want[:6], want[-4:], label)
+        except config.PolicyNotTrusted as e:
+            ok1, d1 = False, "receipt policy: %s" % e
     checks.append(Check(1, "policy", ok1, d1))
 
     # 2. signature

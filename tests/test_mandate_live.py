@@ -97,6 +97,165 @@ class ResolutionTests(Isolated):
         self.assertEqual(c.get("/health").json()["policy_sha256"], p.short_sha())
 
 
+class PolicyTrustTests(Isolated):
+    """Review of c432e35: earlier receipts keep verifying after a new mandate is
+    signed, and an active policy that is not the owner's is never enforced."""
+
+    def unsigned_active(self, **rules):
+        from policy.compile import build_policy_dict, write_policy
+        d = build_policy_dict(PHRASE, [{"name": "Bodega X", "address": "Carrera 80 # 7-15, Bogotá"}],
+                              99_000_000, "new_address", signed_by="owner-key:marta")
+        d.update(rules)
+        write_policy(d, config.active_policy_path())
+
+    def test_earlier_receipts_still_verify_after_a_new_mandate(self):
+        from receipts.verify import verify_receipt
+        from tests.fixtures.fake_agent import run_fixture
+        r0 = run_fixture("clean", supervised=True, run_dir=self.tmp / "r0")      # committed policy
+        p1 = self.write_active(max_cop=150000)
+        config.policy_path()                                                      # archived on use
+        r1 = run_fixture("clean", supervised=True, run_dir=self.tmp / "r1")      # policy 1
+        self.assertEqual(r1.receipt["policy_sha256"], p1.sha256())
+        p2 = self.write_active(max_cop=140000)                                    # a new mandate
+        self.assertNotEqual(p1.sha256(), p2.sha256())
+        for out, d in ((r0, "r0"), (r1, "r1")):
+            res = verify_receipt(str(out.receipt_path), evidence_dir=str(self.tmp / d))
+            self.assertTrue(res.checks[0].ok, res.checks[0].detail)
+            self.assertNotIn(str(self.tmp), res.checks[0].detail)               # no absolute path
+        # an explicit --policy still overrides, and says which one without its absolute path
+        res = verify_receipt(str(r1.receipt_path), policy_path=config.active_policy_path())
+        self.assertFalse(res.checks[0].ok)
+        self.assertNotIn(str(self.tmp), res.checks[0].detail)
+        self.assertIn("RUNS_DIR/policy/active.policy.yaml", res.checks[0].detail)
+
+    def test_a_run_in_progress_keeps_its_policy_verifiable(self):
+        # the loop loads the policy once; a mandate signed meanwhile must not
+        # make its receipt fail check 1
+        from receipts.verify import verify_receipt
+        from tests.fixtures.fake_agent import run_fixture
+        from agent import loop
+        p1 = self.write_active(max_cop=150000)
+        real = loop.load_policy
+
+        def sign_meanwhile(path):
+            pol = real(path)                       # the loop has its policy ...
+            self.write_active(max_cop=130000)      # ... and the owner signs a new one
+            return pol
+        with mock.patch.object(loop, "load_policy", sign_meanwhile):
+            out = run_fixture("clean", supervised=True, run_dir=self.tmp / "r")
+        self.assertEqual(out.receipt["policy_sha256"], p1.sha256())
+        self.assertNotEqual(load(config.active_policy_path()).sha256(), p1.sha256())
+        res = verify_receipt(str(out.receipt_path), evidence_dir=str(self.tmp / "r"))
+        self.assertTrue(res.checks[0].ok, res.checks[0].detail)
+
+    def test_archived_policy_must_be_the_owners(self):
+        from receipts.verify import verify_receipt
+        from tests.fixtures.fake_agent import run_fixture
+        self.write_active(max_cop=150000)
+        out = run_fixture("clean", supervised=True, run_dir=self.tmp / "r")
+        sha = out.receipt["policy_sha256"]
+        # another key on this machine: the archived policy is not the owner's
+        self.key.unlink()
+        keys.load_or_create_seed(self.key)
+        res = verify_receipt(str(out.receipt_path))
+        self.assertFalse(res.checks[0].ok)
+        self.assertIn("not signed by the owner", res.checks[0].detail)
+        self.assertTrue(config.archived_policy_path(sha).is_file())
+        # pinning the owner's public key checks it again
+        res = verify_receipt(str(out.receipt_path), pinned_pubkey=keys.public_from_seed(self.seed))
+        self.assertTrue(res.checks[0].ok, res.checks[0].detail)
+
+    def test_unsigned_active_policy_is_never_enforced(self):
+        from tests.fixtures.fake_agent import run_fixture
+        self.unsigned_active()
+        with self.assertRaises(config.PolicyNotTrusted):
+            config.policy_path()
+        with self.assertRaises(config.PolicyNotTrusted):              # the loop stops
+            run_fixture("clean", supervised=True)
+        c = TestClient(service.app)
+        r = c.get("/api/policy")
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("not trusted", r.json()["detail"])
+        self.assertNotIn(str(self.tmp), r.json()["detail"])
+        self.assertFalse(c.get("/health").json()["policy_hash_ok"])
+
+    def test_tampered_or_foreign_active_policy_is_refused(self):
+        import yaml
+        p = self.write_active(max_cop=150000)
+        path = config.active_policy_path()
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # 1. rules changed after signing (hash no longer matches)
+        data["rules"] = [{"deliver_only": [{"name": "Bodega X", "address": "Carrera 80 # 7-15"}]},
+                         {"max_per_order_cop": 99_000_000}]
+        path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+        with self.assertRaisesRegex(config.PolicyNotTrusted, "sha256"):
+            config.policy_path()
+        # 2. hash restamped, signature not the owner's
+        from interceptor.policy import Policy
+        q = Policy(data)
+        q.stamp_hash()
+        q.sign(keys.generate_seed())
+        path.write_text(yaml.safe_dump(q.to_dict(), allow_unicode=True), encoding="utf-8")
+        with self.assertRaisesRegex(config.PolicyNotTrusted, "owner"):
+            config.policy_path()
+        # 3. a genuine one, but no owner key on this machine to check it
+        self.write_active(max_cop=150000)
+        self.key.unlink()
+        with self.assertRaisesRegex(config.PolicyNotTrusted, "no owner key"):
+            config.policy_path()
+        self.assertTrue(p.sha256())
+
+
+class BenchPolicyTests(Isolated):
+    """Review of c432e35: the bench resolves the policy once and records it."""
+
+    def run_bench(self, out_dir, sign_between=False, extra=()):
+        from bench import run as bench_run
+        seen = []
+
+        def fake_one_run(meta, sc, v, m, out, steps, policy_path=None, policy_sha256=None):
+            seen.append((policy_path, policy_sha256))
+            if sign_between:
+                self.write_active(max_cop=100000 + len(seen))
+            return {"scenario": sc, "variant": v, "mode": m, "policy_sha256": policy_sha256}
+
+        class Meta:
+            def model(self, name):
+                return "fake"
+        with mock.patch.object(bench_run, "one_run", fake_one_run), \
+                mock.patch.object(bench_run, "portal_up", lambda url: True), \
+                mock.patch.object(bench_run.meta_client, "MetaClient", Meta):
+            code = bench_run.main(["--tag", "trial", "--out-dir", str(out_dir), "--scenarios", "a1",
+                                   "--variants", "1", "2", "--modes", "supervised", *extra])
+        return code, seen
+
+    def test_one_policy_for_the_whole_bench(self):
+        import json
+        p = self.write_active(max_cop=150000)
+        code, seen = self.run_bench(self.tmp / "b", sign_between=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual({s for _, s in seen}, {p.sha256()})
+        self.assertEqual({str(x) for x, _ in seen}, {str(config.active_policy_path())})
+        result = json.loads((self.tmp / "b" / "results.json").read_text())
+        self.assertEqual(result["policy_sha256"], p.sha256())
+        self.assertEqual({r["policy_sha256"] for r in result["rows"]}, {p.sha256()})
+
+    def test_resume_under_another_policy_is_refused(self):
+        self.write_active(max_cop=150000)
+        code, _ = self.run_bench(self.tmp / "b", extra=("--variants", "1"))
+        self.assertEqual(code, 0)
+        self.write_active(max_cop=140000)
+        code, seen = self.run_bench(self.tmp / "b", extra=("--resume",))
+        self.assertEqual(code, 2)
+        self.assertEqual(seen, [])
+
+    def test_untrusted_active_policy_stops_the_bench(self):
+        PolicyTrustTests.unsigned_active(self)
+        code, seen = self.run_bench(self.tmp / "b")
+        self.assertEqual((code, seen), (2, []))
+
+
 class MandateServiceTests(Isolated):
     def setUp(self):
         super().setUp()
@@ -143,13 +302,43 @@ class MandateServiceTests(Isolated):
         self.assertEqual(self.c.get("/api/policy").json()["sha256"], on_disk.sha256())
         # no temporary files left next to it, and no key material in any answer
         self.assertEqual(sorted(x.name for x in config.active_policy_path().parent.iterdir()),
-                         ["active.policy.yaml"])
+                         sorted(["active.policy.yaml", on_disk.sha256() + ".policy.yaml"]))
         for text in (r.text, self.c.get("/api/policy").text):
             self.assertNotIn(self.seed.hex(), text)
             self.assertNotIn("signature\"", text.replace("signature_valid\"", ""))
         # a draft signs once
         self.assertEqual(self.c.post("/api/mandate/sign", json={"id": d["id"]},
                                      headers=SAME).status_code, 409)
+
+    def test_a_failed_sign_keeps_the_draft(self):
+        d = self.draft(FakeMeta(GOOD)).json()
+
+        def broken(signed):
+            raise OSError("disk full")
+        with mock.patch.object(service, "write_active_policy", broken):
+            with self.assertRaises(OSError):
+                self.c.post("/api/mandate/sign", json={"id": d["id"]}, headers=SAME)
+        self.assertIn(d["id"], service._drafts)
+        self.assertFalse(config.active_policy_path().exists())
+        r = self.c.post("/api/mandate/sign", json={"id": d["id"]}, headers=SAME)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(service._drafts, {})
+
+    def test_discard_forgets_the_draft(self):
+        d = self.draft(FakeMeta(GOOD)).json()
+        # same protections as signing
+        self.assertEqual(self.c.post("/api/mandate/discard", json={"id": d["id"]},
+                                     headers=EVIL).status_code, 403)
+        self.assertEqual(self.c.post("/api/mandate/discard", content=b'{"id": "x"}',
+                                     headers={"Content-Type": "text/plain"}).status_code, 415)
+        self.assertIn(d["id"], service._drafts)
+        r = self.c.post("/api/mandate/discard", json={"id": d["id"]}, headers=SAME)
+        self.assertEqual(r.json(), {"status": "discarded"})
+        self.assertEqual(self.c.post("/api/mandate/sign", json={"id": d["id"]},
+                                     headers=SAME).status_code, 409)
+        self.assertEqual(self.c.post("/api/mandate/discard", json={"id": d["id"]},
+                                     headers=SAME).json(), {"status": "none"})
+        self.assertFalse(config.active_policy_path().exists())
 
     def test_refused_mandates_change_nothing(self):
         cases = [

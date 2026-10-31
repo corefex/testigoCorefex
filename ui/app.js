@@ -150,6 +150,7 @@ function allowedAddresses() {
 // quadrant ("Sur", ...), "#"/"No."/"N°"/"número", en/em dashes (a space after
 // an explicit separator), I/l/O misread for 1/1/0 in digit places, ASCII digits
 // only; up to four words after it are part of it, except the city "Bogotá"/"D.C."
+// and the shop's name when it is all that is left
 // -> "calle 45 # 12-30", "calle 45a bis # 12-30 sur".
 const STREET_TYPES = {
   calle: "calle", cll: "calle", cl: "calle",
@@ -159,8 +160,6 @@ const STREET_TYPES = {
   transversal: "transversal", transv: "transversal", tv: "transversal", tr: "transversal",
 };
 const QUADRANTS = ["sur", "este", "norte", "oeste"];
-const COMPLEMENTS = new Set([...QUADRANTS, "bis", "int", "interior", "apto", "apartamento", "ap", "local",
-  "loc", "of", "oficina", "torre", "bloque", "bl", "casa", "piso", "lote", "manzana", "mz", "etapa"]);
 const CITY_WORDS = new Set(["bogota", "dc"]);
 const TAIL_MAX = 4;
 const ci = w => w.replace(/[a-z]/g, c => `[${c}${c.toUpperCase()}]`);
@@ -185,6 +184,10 @@ const ADDRESS_AT = new RegExp(ADDR_SRC, "uy");
 function fold(t) {
   return String(t).normalize("NFKD").replace(/\p{Mn}/gu, "").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
 }
+// The shop's name (common/config.py SHOP): exactly that after an address is the
+// label the portal shows next to the field, not part of the address.
+const SHOP_NAME = "Tienda Doña Marta";
+const SHOP_WORDS = fold(SHOP_NAME).split(" ").map(w => w.replace(/\./g, ""));
 function ocrDigits(t) { return t.replace(/[Il]/g, "1").replace(/O/g, "0").replace(/^0+(?=[0-9])/, ""); }
 function addrNumber(num, suffix) {
   const s = (suffix || "").replace(/\s+/g, "").toLowerCase();
@@ -193,23 +196,25 @@ function addrNumber(num, suffix) {
   return ocrDigits(num) + head + (k < 0 ? "" : " bis") + (after ? " " + after : "");
 }
 const isWordStart = c => /^[\p{L}0-9]$/u.test(c);
-function addrTail(text, i) {
-  const out = [], n = text.length;
-  let city = false;
+function addrSegment(text, i) {
+  const words = [], n = text.length;
   const at = k => String.fromCodePoint(text.codePointAt(k));
-  while (out.length < TAIL_MAX) {
-    let comma = false;
-    while (i < n && (/\s/u.test(text[i]) || text[i] === ",")) { comma = comma || text[i] === ","; i++; }
-    if (i >= n || !isWordStart(at(i))) break;
+  for (;;) {
+    while (i < n && (/\s/u.test(text[i]) || text[i] === ",")) i++;
+    if (i >= n || !isWordStart(at(i))) return words;
     ADDRESS_AT.lastIndex = i;
-    if (ADDRESS_AT.test(text)) break;
+    if (ADDRESS_AT.test(text)) return words;
     let j = i;
     while (j < n && (isWordStart(at(j)) || text[j] === ".")) j += at(j).length;
-    const word = fold(text.slice(i, j)).replace(/\./g, "");
+    words.push(fold(text.slice(i, j)).replace(/\./g, ""));
     i = j;
-    if (CITY_WORDS.has(word)) city = true;
-    else if (city && !comma && !COMPLEMENTS.has(word)) break;
-    else out.push(word);
+  }
+}
+function addrTail(text, i) {
+  const out = [], words = addrSegment(text, i);
+  for (let k = 0; k < words.length; k++) {
+    if (words.slice(k).join(" ") === SHOP_WORDS.join(" ") || out.length === TAIL_MAX) break;
+    if (!CITY_WORDS.has(words[k])) out.push(words[k]);
   }
   return out;
 }
@@ -1004,6 +1009,18 @@ async function signMandate() {
   } catch (err) { setMandate({ state: "draft", draft: d, error: err.message }); }
 }
 
+// Discard forgets the draft on the service too, so it can never be signed later.
+async function discardMandate() {
+  const d = S.mandate.draft;
+  setMandate({});
+  if (!d || !d.id) return;
+  try {
+    await getJSON("/api/mandate/discard", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: d.id }) });
+  } catch (err) { setMandate({ error: "Discard failed: " + err.message }); }
+}
+
 // Voice Transcribe takes WAV only: 16 kHz mono 16-bit PCM, encoded here.
 function wavBase64(chunks, rate) {
   let n = 0; chunks.forEach(c => { n += c.length; });
@@ -1077,7 +1094,7 @@ function draw() {
   on("vrec", startRecording); on("vstop", () => stopRecording(false));
   on("vapprove", () => decide("approve")); on("vdeny", () => decide("deny"));
   on("mrec", startMandate); on("mstop", () => stopMandate(false));
-  on("msign", signMandate); on("mdiscard", () => setMandate({}));
+  on("msign", signMandate); on("mdiscard", discardMandate);
 }
 
 // -- live events -------------------------------------------------------------

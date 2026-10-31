@@ -34,6 +34,7 @@ from pathlib import Path
 
 from common import clock, config, meta_client
 from interceptor.channels import SamSparkChannel
+from interceptor.policy import load as load_policy
 from interceptor.sensitive import SamButtons
 
 from agent import loop
@@ -101,7 +102,9 @@ def _pixel_fields(calls, errors):
             "pixel_check_ms": regions, "pixel_errors": list(errors)}
 
 
-def one_run(meta, scenario, variant, mode, out_dir, max_steps):
+def one_run(meta, scenario, variant, mode, out_dir, max_steps, policy_path=None, policy_sha256=None):
+    """One configuration under the policy the bench resolved once (`policy_path`),
+    recorded in the row as `policy_sha256`."""
     supervised = mode == "supervised"
     run_dir = out_dir / ("%s_v%d_%s" % (scenario, variant, mode))
     agent = WonderAgent(meta)
@@ -110,7 +113,8 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
     spent0, t0 = meta.spent_usd(), time.perf_counter()
     started = clock.iso()
     row = {"scenario": scenario, "variant": variant, "mode": mode, "model": meta.model("wonder"),
-           "approver": "bench-person" if supervised else None, "ts": started, "started": started}
+           "approver": "bench-person" if supervised else None, "ts": started, "started": started,
+           "policy_sha256": policy_sha256}
     if (scenario, variant) == EDGE[:2]:
         row.update(edge_case=True, name=EDGE[2])
 
@@ -124,6 +128,7 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
         with open_portal(scenario, variant, pixel_channel=pixels, run_dir=run_dir) as driver:
             try:
                 out = loop.run(driver, agent, supervised=supervised, approver=BenchPerson(),
+                               policy_path=policy_path,
                                sink=_Tee(run_dir / "events.jsonl", NullSink()),
                                sensitive=SamButtons(meta.segment, read=pixels.read_label),
                                max_steps=max_steps, run_dir=run_dir)
@@ -244,11 +249,26 @@ def main(argv=None):
     if not args.resume:
         rows_path.write_text("", encoding="utf-8")
 
+    # One policy for the whole bench: a mandate signed in view 1 meanwhile does
+    # not change it half way (rows never mix policies).
+    try:
+        pol_path = config.policy_path()
+    except config.PolicyNotTrusted as e:
+        print("bench: refused: the active policy is not trusted: %s" % e, file=sys.stderr)
+        return 2
+    pol_sha = load_policy(pol_path).sha256()
+    mixed = sorted({r.get("policy_sha256") for r in rows if r.get("policy_sha256")} - {pol_sha})
+    if mixed:
+        print("bench: refused: rows.jsonl was measured under another policy (%s…); "
+              "use --force to start over" % mixed[0][:12], file=sys.stderr)
+        return 2
+
     httpd = None if portal_up(s.portal_url) else start_portal()
     meta = meta_client.MetaClient()
     try:
         for i, (sc, v, m) in enumerate(todo, 1):
-            row = one_run(meta, sc, v, m, out_dir, args.max_steps)
+            row = one_run(meta, sc, v, m, out_dir, args.max_steps,
+                          policy_path=pol_path, policy_sha256=pol_sha)
             rows.append(row)
             with rows_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -260,6 +280,7 @@ def main(argv=None):
             httpd.shutdown()
 
     result = {"generated": clock.iso(), "model": meta.model("wonder"), "tag": args.tag,
+              "policy_sha256": pol_sha, "policy": config.runs_label(pol_path),
               **completeness(rows), "summary": summarize(rows), "rows": rows}
     results_path = (s.runs_dir / "bench_results.json" if args.tag == "full"
                     else out_dir / "results.json")

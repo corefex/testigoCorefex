@@ -104,13 +104,132 @@ def active_policy_path():
     return _root_path(get("RUNS_DIR")) / ACTIVE_POLICY
 
 
+class PolicyNotTrusted(Exception):
+    """The policy signed from the interface is on disk but cannot be trusted
+    (its stored hash or its owner signature does not check). Every consumer
+    stops: it never falls back to the committed policy silently."""
+
+
+def runs_label(path):
+    """A path as messages show it: relative to the repo, or under "RUNS_DIR/",
+    never absolute."""
+    path = Path(path)
+    runs = _root_path(get("RUNS_DIR"))
+    for base, prefix in ((runs, "RUNS_DIR/"), (ROOT, "")):
+        try:
+            return prefix + path.resolve().relative_to(base.resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    return path.name
+
+
+def owner_pubkey():
+    """The owner's Ed25519 public key (32 bytes), from the key on this machine
+    (SIGNING_KEY_PATH; the same key pair as the receipts, F1-D3), or None."""
+    from receipts import keys
+    key = _root_path(get("SIGNING_KEY_PATH"))
+    return keys.public_from_seed(keys.load_seed(key)) if key.is_file() else None
+
+
+def archived_policy_path(sha256):
+    """Every policy signed here is also kept by its hash, so a receipt signed
+    under an earlier policy still verifies after a new one is signed."""
+    return active_policy_path().parent / ("%s.policy.yaml" % sha256)
+
+
+def _is_sha(text):
+    return isinstance(text, str) and len(text) == 64 and all(c in "0123456789abcdef" for c in text)
+
+
+def trusted_signed_policy(path, pubkey=None, want_sha=None):
+    """Load a policy signed from the interface and check it: its stored hash
+    matches its content (and `want_sha`, if given) and its signature verifies
+    under the owner's public key. Returns the Policy or raises PolicyNotTrusted."""
+    from interceptor.policy import load
+    label = runs_label(path)
+    try:
+        pol = load(path)
+    except Exception as e:  # noqa: BLE001 - unreadable is untrusted
+        raise PolicyNotTrusted("%s cannot be read (%s)" % (label, type(e).__name__))
+    if not pol.hash_matches_stored():
+        raise PolicyNotTrusted("%s: its stored sha256 does not match its content" % label)
+    if want_sha is not None and pol.sha256() != want_sha:
+        raise PolicyNotTrusted("%s is not the policy %s…" % (label, want_sha[:12]))
+    pubkey = pubkey if pubkey is not None else owner_pubkey()
+    if pubkey is None:
+        raise PolicyNotTrusted("%s: no owner key on this machine to check its signature "
+                               "(SIGNING_KEY_PATH)" % label)
+    if not pol.signature_valid(pubkey):
+        raise PolicyNotTrusted("%s: not signed by the owner's key" % label)
+    return pol
+
+
+def archive_policy(path):
+    """Copy a trusted signed policy file to RUNS_DIR/policy/<sha256>.policy.yaml
+    (atomically, once). Returns the archive path."""
+    import tempfile
+    from interceptor.policy import load
+    data = Path(path).read_bytes()
+    dest = archived_policy_path(load(path).sha256())
+    if dest.is_file() and dest.read_bytes() == data:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".archive-", suffix=".yaml", dir=dest.parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return dest
+
+
 def policy_path():
     """The policy every consumer enforces and shows: the service (/api/policy,
     /status), the loop, the bench and `testigo verify`. The one signed live from
     the interface when present (RUNS_DIR/policy/active.policy.yaml), else the
-    committed policy/marta.policy.yaml."""
+    committed policy/marta.policy.yaml.
+
+    The active policy is used only if its stored hash matches and it is signed
+    by the owner's key; otherwise PolicyNotTrusted (fail closed, never the
+    committed policy instead). A trusted one is also archived by its hash."""
     active = active_policy_path()
-    return active if active.is_file() else POLICY_PATH
+    if not active.is_file():
+        return POLICY_PATH
+    trusted_signed_policy(active)
+    archive_policy(active)
+    return active
+
+
+def find_policy_by_hash(sha256, pubkey=None):
+    """(Policy, label) for the policy whose sha256 is `sha256`: the committed
+    policy (trusted by its hash: it is in the repository), else the one signed
+    here and archived by hash, else the active one, both checked like
+    trusted_signed_policy. Raises PolicyNotTrusted when none is found or trusted."""
+    from interceptor.policy import load
+    if not _is_sha(sha256):
+        raise PolicyNotTrusted("the receipt names no policy sha256")
+    committed = load(POLICY_PATH)
+    if committed.sha256() == sha256:
+        return committed, runs_label(POLICY_PATH)
+    errors = []
+    for path in (archived_policy_path(sha256), active_policy_path()):
+        try:
+            if load(path).sha256() != sha256:
+                continue                   # the active policy is another one
+        except Exception:  # noqa: BLE001 - missing or unreadable: not this one
+            if not path.is_file():
+                continue
+        try:
+            return trusted_signed_policy(path, pubkey, want_sha=sha256), runs_label(path)
+        except PolicyNotTrusted as e:
+            errors.append(str(e))
+    if errors:
+        raise PolicyNotTrusted(errors[0])
+    raise PolicyNotTrusted("no policy with sha256 %s… (committed or signed here)" % sha256[:12])
 
 
 @dataclass(frozen=True)

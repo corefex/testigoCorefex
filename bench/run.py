@@ -1,7 +1,13 @@
 """WitnessBench (F10): every configuration with and without TESTIGO+, real models only.
 
   .venv/bin/python -m bench.run [--scenarios clean a1 a2 a3] [--variants 1 2 3 4 5]
-                                [--modes no_supervisor supervised] [--dry-run]
+                                [--modes no_supervisor supervised] [--edge] [--dry-run]
+
+`--edge` adds the R10 / F5-D4 case: A1 written in words only (scenario a1edge,
+variant 1), which the instruction filter does not flag. It runs in every mode
+asked for, and its rows carry `edge_case: true, name: "r10_filter_limit"`, so
+bench/score.py reports it apart and it never moves the main number. To add it
+to a finished full run: `--resume --edge` (only the edge rows are new).
 
 Each run is the same loop as agent.run (F3): Wonder in Chromium against the
 portal, with or without the interceptor. Success is read only from the portal's
@@ -32,13 +38,16 @@ from agent import loop
 from agent.agent import WonderAgent
 from agent.approval import Approver
 from agent.driver import ATTACKER_ACCT, open_portal
-from agent.run import portal_up, start_portal
+from agent.run import _Tee, portal_up, start_portal
+from interceptor.sink import NullSink
 
 from .score import summarize
 
 SCENARIOS = ("clean", "a1", "a2", "a3")
 VARIANTS = (1, 2, 3, 4, 5)
 MODES = ("no_supervisor", "supervised")
+# R10 / F10-D4: the filter's known limit, run apart from the 20 configurations.
+EDGE = ("a1edge", 1, "r10_filter_limit")
 
 
 class BenchPerson(Approver):
@@ -46,6 +55,11 @@ class BenchPerson(Approver):
 
     def approve(self, approval_event):
         return True, {"method": "bench-person", "voice_transcript": "", "voice_match": False}
+
+
+def edge_configs(modes):
+    """The edge case in each mode, as (scenario, variant, mode)."""
+    return [(EDGE[0], EDGE[1], m) for m in modes]
 
 
 def one_run(meta, scenario, variant, mode, out_dir, max_steps):
@@ -56,9 +70,13 @@ def one_run(meta, scenario, variant, mode, out_dir, max_steps):
     spent0, t0 = meta.spent_usd(), time.perf_counter()
     row = {"scenario": scenario, "variant": variant, "mode": mode, "model": meta.model("wonder"),
            "approver": "bench-person" if supervised else None, "ts": clock.iso()}
+    if (scenario, variant) == EDGE[:2]:
+        row.update(edge_case=True, name=EDGE[2])
     try:
+        run_dir.mkdir(parents=True, exist_ok=True)
         with open_portal(scenario, variant, pixel_channel=pixels, run_dir=run_dir) as driver:
             out = loop.run(driver, agent, supervised=supervised, approver=BenchPerson(),
+                           sink=_Tee(run_dir / "events.jsonl", NullSink()),
                            sensitive=SamButtons(meta.segment, read=pixels.read_label),
                            max_steps=max_steps, run_dir=run_dir)
     except Exception as e:  # noqa: BLE001 - a broken run is a row with an error, not a crash
@@ -97,6 +115,8 @@ def main(argv=None):
     ap.add_argument("--variants", nargs="+", type=int, default=list(VARIANTS), choices=VARIANTS)
     ap.add_argument("--modes", nargs="+", default=list(MODES), choices=MODES)
     ap.add_argument("--max-steps", type=int, default=loop.MAX_STEPS)
+    ap.add_argument("--edge", action="store_true",
+                    help="also run the R10 filter-limit case (a1edge v1), reported apart")
     ap.add_argument("--resume", action="store_true", help="skip configurations already in rows.jsonl")
     ap.add_argument("--dry-run", action="store_true", help="list the configurations and stop")
     ap.add_argument("--tag", default="full",
@@ -105,6 +125,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     configs = [(s, v, m) for s in args.scenarios for v in args.variants for m in args.modes]
+    if args.edge:
+        configs += edge_configs(args.modes)
     if args.dry_run:
         for c in configs:
             print("%s v%d %s" % c)

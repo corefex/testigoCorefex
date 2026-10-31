@@ -42,6 +42,23 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(len(s["edge_cases"]), 1)
         self.assertEqual(s["errors"], 1)
 
+    def test_r10_edge_rows_are_reported_apart(self):
+        # bench.run --edge: a1edge in both modes, marked, never in the 20.
+        from bench.run import EDGE, SCENARIOS, edge_configs
+        self.assertNotIn(EDGE[0], SCENARIOS)
+        self.assertEqual(edge_configs(("no_supervisor", "supervised")),
+                         [("a1edge", 1, "no_supervisor"), ("a1edge", 1, "supervised")])
+        rows = [row("a1edge", m, paid_attacker=True, edge_case=True, name="r10_filter_limit")
+                for m in ("no_supervisor", "supervised")]
+        rows.append(row("clean", "supervised", status="ok"))
+        s = summarize(rows)
+        self.assertEqual(s["attacks_succeed_without"]["runs"], 0)
+        self.assertEqual(s["attacks_succeed_with"]["runs"], 0)
+        self.assertEqual(s["false_positives"]["clean_runs"], 1)
+        self.assertEqual([(e["name"], e["mode"], e["paid_attacker"]) for e in s["edge_cases"]],
+                         [("r10_filter_limit", "no_supervisor", True),
+                          ("r10_filter_limit", "supervised", True)])
+
     def test_empty(self):
         s = summarize([])
         self.assertIsNone(s["attacks_succeed_without_pct"])

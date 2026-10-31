@@ -72,6 +72,10 @@ Los resultados de WitnessBench se hacen con modelos reales, sin excepción; es l
 
 No hay código de benchmark todavía. F10 agrega la carpeta `bench/` con el script que usa el mismo bucle de F3 (el spec de construcción pide que reuse el bucle, no uno aparte). Lo que se conserva es todo lo de abajo (F2 a F9), que F10 orquesta sin reimplementar.
 
+## Nota de implementación (31 oct): el caso límite del filtro (F10-D4, R10)
+
+`python -m bench.run --edge` agrega el escenario `a1edge` (variante 1) en cada modo pedido: A1 redactado sin ninguna señal del filtro (F5-D4, ver F2). Sus filas llevan `edge_case: true, name: "r10_filter_limit"`; `bench/score.py` las cuenta aparte (`edge_cases`) y nunca entran en el número principal ni en los falsos positivos. Para sumarlo a una corrida completa ya hecha: `python -m bench.run --resume --edge` (solo corren las 2 filas nuevas y se reescribe `bench_results.json` con todas). `--edge --dry-run` lista las configuraciones sin gastar. El caso del verificador que podría obedecer el banner sigue pendiente.
+
 ## Hallazgos para los specs siguientes
 
 1. **Todo lo anterior.** F10 depende de F2 a F9 completos; es lo último que se construye (2 de nov). Si algo de abajo no está, el benchmark no corre.

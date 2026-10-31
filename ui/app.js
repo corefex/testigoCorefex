@@ -33,7 +33,7 @@ const ICON = {
   dot: `<svg viewBox="0 0 24 24" ${P}><circle cx="12" cy="12" r="3"/></svg>`,
   ask: `<svg viewBox="0 0 24 24" ${P}><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.4M12 17v.5"/></svg>`,
   user: `<svg viewBox="0 0 24 24" ${P}><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>`,
-  coin: `<svg viewBox="0 0 24 24" ${P}><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .8 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></svg>`,
+  box: `<svg viewBox="0 0 24 24" ${P}><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8M7.5 5.5l9 5"/></svg>`,
   file: `<svg viewBox="0 0 24 24" ${P}><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/></svg>`,
   seal: `<svg viewBox="0 0 24 24" ${P}><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>`,
   term: `<svg viewBox="0 0 24 24" ${P}><path d="m5 8 4 4-4 4M12 16h7"/></svg>`,
@@ -323,7 +323,7 @@ function logLine(e) {
     case "approval.granted": return isGranted(e)
       ? [ICON.check, "ok", "Approved · voice + passkey", e.voice_transcript]
       : [ICON.stop, "bad", e.voice_match ? "Not approved · denied" : "Voice did not match · denied", e.voice_transcript];
-    case "order.confirmed": return [ICON.coin, "info", "Portal recorded a confirmed order", `${cop(e.amount_cop)} → ${e.address}`];
+    case "order.confirmed": return [ICON.box, "info", "Portal recorded a confirmed order", `${cop(e.amount_cop)} → ${e.address}`];
     case "verify.result": {
       const review = e.moment === "review";
       if (e.status === "match") return [ICON.check, "ok", review ? "Review screen matches the approval" : "Verified after the click",
@@ -462,7 +462,7 @@ const render = {
       <div class="triad">
         <div class="s"><div class="c">${ICON.eye}</div>Agent asked</div><div class="j"></div>
         <div class="s"><div class="c">${ICON.user}</div>You approved</div><div class="j"></div>
-        <div class="s"><div class="c">${ICON.coin}</div>It executed</div>
+        <div class="s"><div class="c">${ICON.box}</div>It executed</div>
       </div>
       <div class="sim">Simulation only · simulated shop, supplier and addresses · no real brands</div>
     </div>`;
@@ -487,7 +487,7 @@ const render = {
           ${p.deliver_only.map(x => `<div class="panel rule"><div class="ic">${ICON.user}</div><div>
             <div class="k">Deliver only to</div><div class="v">${esc(x.name)} <span class="mono">· ${esc(x.address)}</span></div>
             <div class="muted small">from the shop profile · simulated</div></div></div>`).join("")}
-          <div class="panel rule"><div class="ic">${ICON.coin}</div><div>
+          <div class="panel rule"><div class="ic">${ICON.box}</div><div>
             <div class="k">Max per order</div><div class="v">${esc(cop(p.max_per_order_cop))}</div></div></div>
           <div class="panel rule"><div class="ic">${ICON.ask}</div><div>
             <div class="k">Ask before</div><div class="v">${esc(String(p.ask_before).replace(/_/g, " "))}</div></div></div>
@@ -529,7 +529,7 @@ const render = {
       alert = `<div class="alert">${ICON.stop}<div><div class="t">Order confirmed for delivery to ${esc(order.address)} — ${esc(cop(order.amount_cop))}</div>
         <div class="s">Not the shop's address in the owner's policy: the goods go to the attacker. Nothing checked what the agent saw before it clicked.</div></div></div>`;
     } else if (order) {
-      alert = `<div class="alert neutral">${ICON.coin}<div><div class="t">Order confirmed for delivery to ${esc(order.address)} — ${esc(cop(order.amount_cop))}</div>
+      alert = `<div class="alert neutral">${ICON.box}<div><div class="t">Order confirmed for delivery to ${esc(order.address)} — ${esc(cop(order.amount_cop))}</div>
         <div class="s">The order went to an allowed address in this run. It is recorded as it happened.</div></div></div>`;
     }
     return `<h1 class="title">Without TESTIGO+</h1>

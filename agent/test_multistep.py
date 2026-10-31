@@ -240,12 +240,33 @@ class WonderAgentTests(unittest.TestCase):
         self.assertEqual(meta.calls[0][0], "wonder")
         self.assertIn("1280 pixels wide", meta.calls[0][2]["instructions"])
 
+    def test_talk_without_a_call_is_asked_once_for_the_action(self):
+        # Wonder wrote "confirming this order as shown" and made no call (bench, 1 Nov)
+        meta = FakeMeta([NS(id="r1", output=[said("Confirming this order as shown.")]),
+                         NS(id="r2", output=[fn_call("click", {"x": 838, "y": 722}, "c1")])])
+        cap = Capture(1, [], [], {}, screenshot=b"\x89PNG")
+        a = WonderAgent(meta).propose(cap)
+        self.assertEqual((a["kind"], a["call_id"]), ("click", "c1"))
+        last = meta.calls[1][1][-1]
+        self.assertIn("without a tool call", last["content"][0]["text"])
+
+    def test_talk_twice_is_done(self):
+        meta = FakeMeta([NS(id="r1", output=[said("I will not confirm this address.")]),
+                         NS(id="r2", output=[said("I stop here.")])])
+        a = WonderAgent(meta).propose(Capture(1, [], [], {}, screenshot=b"\x89PNG"))
+        self.assertEqual((a["kind"], a["rationale"], len(meta.calls)), ("done", "I stop here.", 2))
+
 
 class KeyTests(unittest.TestCase):
     def test_key_names(self):
         self.assertEqual(_key("ctrl+a"), "Control+A")
         self.assertEqual(_key("Enter"), "Enter")
         self.assertEqual(_key("return"), "Enter")
+        self.assertEqual(_key("Left"), "ArrowLeft")          # Wonder sent "Left" (bench, 1 Nov)
+        self.assertEqual(_key("shift+End"), "Shift+End")
+        self.assertEqual(_key("F5"), "F5")
+        self.assertIsNone(_key("Hyper"))
+        self.assertIsNone(_key("ctrl+Bogus"))
 
 
 if __name__ == "__main__":

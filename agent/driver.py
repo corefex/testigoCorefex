@@ -8,6 +8,7 @@ The real driver is Playwright (F3). The offline test double lives in
 tests/fixtures/fake_agent.py and is never used outside tests.
 """
 
+import re
 import json
 import urllib.error
 import urllib.request
@@ -121,8 +122,11 @@ class PlaywrightDriver(BrowserDriver):
         elif kind == "type":
             kb.type(action["text"])
         elif kind == "keypress":
-            for key in action["keys"]:
-                kb.press(_key(key))
+            keys = [_key(k) for k in action["keys"]]
+            if None in keys:      # checked before any key is pressed
+                raise ValueError("unknown key in %r" % (action["keys"],))
+            for key in keys:
+                kb.press(key)
         elif kind == "scroll":
             mouse.move(action["x"], action["y"])
             mouse.wheel(0, action["dy"])
@@ -207,14 +211,33 @@ def _scorer_get(portal_url, path, headers=None):
 
 
 def _key(k):
-    """Playwright key names: 'ctrl+a' -> 'Control+A', 'enter' -> 'Enter'."""
-    names = {"ctrl": "Control", "control": "Control", "cmd": "Meta", "meta": "Meta",
-             "alt": "Alt", "shift": "Shift", "enter": "Enter", "return": "Enter",
-             "tab": "Tab", "backspace": "Backspace", "delete": "Delete", "escape": "Escape",
-             "esc": "Escape", "space": "Space"}
-    parts = [names.get(p.strip().lower(), p.strip()) for p in k.split("+")]
-    parts = [p.upper() if len(p) == 1 else p for p in parts]
-    return "+".join(parts)
+    """Playwright key names: 'ctrl+a' -> 'Control+A', 'enter' -> 'Enter',
+    'left' -> 'ArrowLeft'. None when a part is not a key Playwright knows."""
+    parts = []
+    for p in k.split("+"):
+        p = p.strip()
+        name = _KEY_NAMES.get(p.lower().replace(" ", ""))
+        if name is None and len(p) == 1 and p.isprintable():
+            name = p.upper() if p.isalpha() else p
+        if name is None and re.fullmatch(r"[Ff]([1-9]|1[0-2])", p):
+            name = p.upper()
+        if name is None:
+            return None
+        parts.append(name)
+    return "+".join(parts) if parts else None
+
+
+_KEY_NAMES = {
+    "ctrl": "Control", "control": "Control", "cmd": "Meta", "meta": "Meta", "command": "Meta",
+    "super": "Meta", "alt": "Alt", "option": "Alt", "shift": "Shift",
+    "enter": "Enter", "return": "Enter", "numpadenter": "NumpadEnter", "tab": "Tab",
+    "backspace": "Backspace", "delete": "Delete", "del": "Delete", "escape": "Escape",
+    "esc": "Escape", "space": "Space", "insert": "Insert",
+    "left": "ArrowLeft", "right": "ArrowRight", "up": "ArrowUp", "down": "ArrowDown",
+    "arrowleft": "ArrowLeft", "arrowright": "ArrowRight", "arrowup": "ArrowUp",
+    "arrowdown": "ArrowDown", "home": "Home", "end": "End", "pageup": "PageUp",
+    "pagedown": "PageDown", "pgup": "PageUp", "pgdn": "PageDown",
+}
 
 
 def _runs_relative(p):

@@ -166,7 +166,11 @@ def run(driver, agent, supervised=True, approver=None, policy_path=None, sink=No
                                 "bytes": {n: obs.crops.get(n, b"") for n in CROP_NAMES},
                                 "read": {"amount": str(a["amount_cop"]), "address": a["address"]}}
 
-        driver.execute(action)
+        try:
+            driver.execute(action)
+        except ValueError as e:   # e.g. a key Playwright does not know; nothing ran
+            agent.result(action, "not executed: %s" % e)
+            continue
         agent.result(action, "executed")
         out.executed = True
         out.executed_capture = obs

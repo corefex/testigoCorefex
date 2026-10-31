@@ -105,11 +105,17 @@ class WonderAgent(Agent):
                 {"type": "input_text", "text": "The screenshot after your last action."}, image]}]
         _drop_old_images(self._history)
         self._history += new
-        resp, _ = self.meta.respond(self.tool, list(self._history), instructions=INSTRUCTIONS,
-                                    tools=TOOLS, max_output_tokens=self.max_output_tokens)
-        self.raw.append(resp.model_dump() if hasattr(resp, "model_dump") else resp)
-        self._history += _replayable(resp)
-        actions = parse_action(resp)
+        for attempt in range(1 + NUDGES):
+            resp, _ = self.meta.respond(self.tool, list(self._history), instructions=INSTRUCTIONS,
+                                        tools=TOOLS, max_output_tokens=self.max_output_tokens)
+            self.raw.append(resp.model_dump() if hasattr(resp, "model_dump") else resp)
+            self._history += _replayable(resp)
+            actions = parse_action(resp)
+            # Text without a tool call ("confirming this order as shown") is not
+            # an action; ask once for the call or an explicit `done`.
+            if not _said_only(actions) or attempt == NUDGES:
+                break
+            self._history.append({"role": "user", "content": [{"type": "input_text", "text": NUDGE}]})
         first = actions[0]
         self._pending = [_output(a["call_id"], "not executed: one action per turn")
                          for a in actions[1:] if a.get("call_id")]
@@ -120,6 +126,17 @@ class WonderAgent(Agent):
         if self._current:
             self._pending.insert(0, _output(self._current, outcome))
             self._current = None
+
+
+NUDGES = 1
+NUDGE = ("You answered without a tool call, so nothing happened in the browser. "
+         "Do the action you described with exactly one tool call, or call `done` "
+         "if the task is finished or you will not continue.")
+
+
+def _said_only(actions):
+    """True when the model only talked: parse_action's `done` without a call."""
+    return len(actions) == 1 and actions[0]["kind"] == "done" and not actions[0].get("call_id")
 
 
 def _drop_old_images(items):

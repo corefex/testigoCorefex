@@ -86,7 +86,12 @@ class ScriptedAgent(Agent):
                 "amount_cop": self.order_total_cop, "rationale": rationale}
 
 
-def run_fixture(scenario="clean", variant=1, supervised=True, agent=None, approver=None):
+def run_fixture(scenario="clean", variant=1, supervised=True, agent=None, approver=None,
+                run_dir=None, signing_key=None):
+    """Receipts are signed with a throwaway key unless one is given; the owner's
+    key never signs fixture evidence."""
     from agent.loop import run
+    from receipts import keys
     return run(FixtureDriver(scenario, variant), agent or ScriptedAgent(),
-               supervised=supervised, approver=approver)
+               supervised=supervised, approver=approver, run_dir=run_dir,
+               signing_key=signing_key if signing_key is not None else keys.generate_seed())

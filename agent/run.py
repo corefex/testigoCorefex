@@ -6,7 +6,8 @@ Uses the real Meta API (spend goes to runs/usage.jsonl). If the portal is not
 up on PORTAL_PORT, one is started in this process. Every event goes to the
 interceptor service for the interface (best effort) and to
 runs/<date>/<run>/events.jsonl; screenshots, Wonder's raw answers and a summary
-(outcome.json) land next to them.
+(outcome.json) land next to them. An approved payment also leaves its signed
+receipt.json and evidence crops there (F9; `testigo verify` checks them).
 
 Supervised runs classify clicks with SAM (R4) and check the sensitive ones with
 the real pixel channel (F4). A payment that passes is approved by the person at
@@ -87,7 +88,8 @@ def main(argv=None):
                          run_dir=run_dir, headless=not args.headed) as driver:
             out = loop.run(driver, agent, supervised=supervised, approver=ConsoleApprover(),
                            sink=_Tee(run_dir / "events.jsonl", default_sink()),
-                           sensitive=SamButtons(meta.segment), max_steps=args.max_steps)
+                           sensitive=SamButtons(meta.segment), max_steps=args.max_steps,
+                           run_dir=run_dir)
     finally:
         (run_dir / "agent_raw.json").write_text(
             json.dumps(agent.raw, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -105,6 +107,9 @@ def main(argv=None):
                        {k: r[k] for k in ("label", "text", "confidence")} for r in e["regions"]]}
                    for e in out.events if e["type"] == "check.result"],
         "payment": out.payment, "attack_success": out.attack_success,
+        "receipt": out.receipt and {"id": out.receipt["id"],
+                                    "comparison": out.receipt.get("comparison"),
+                                    "path": out.receipt_path and out.receipt_path.name},
         "spent_usd": round(meta.spent_usd() - spent0, 4),
         "steps": [e["label"] for e in out.events if e["type"] == "agent.step"],
     }

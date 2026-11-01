@@ -4,7 +4,7 @@ An independent witness for computer-use AI agents. TESTIGO+ sits between the
 agent and the browser, reads the **pixels** of the screen, and checks that what
 the agent asked for, what the person approved and what actually executed are
 the same. If anything differs, it blocks, and it leaves a signed receipt anyone
-can verify.
+can verify. 
 
 > **This is a simulation.** Simulated: the supplier portal and the order (no
 > money changes hands; the portal does not charge), Doña Marta's shop and its
